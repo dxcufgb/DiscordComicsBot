@@ -84,6 +84,7 @@ class ComicsBot(discord.Client):
                 envFile.write('COMICS-CHANNEL-'+"% s" % incomingGuildId+'='+"% s" % incomingChannelId+'\n')
                 os.environ['COMICS-CHANNEL-'+"% s" % incomingGuildId] = "% s" % incomingChannelId
                 channel = self.get_channel(int(incomingChannelId))
+                self.writeAvailableComicsToGuildJsonFile(incomingGuildId)
                 await channel.send('Setting up this channel ('+"% s" % incomingChannelName+') as dedicated comics channel!')
 
         if message.content.startswith("!dbc") and message.author.guild_permissions.administrator:
@@ -152,7 +153,7 @@ class ComicsBot(discord.Client):
             text += '\n'
             text += '==============================EVERYONE==============================\n'
             text += '!add-comic --name [NAME] --url [URL TO RSS OR ATOM FEED]\n'
-            text += 'Add a commic with assigned name and point to URL\n'
+            text += 'Add a comic with assigned name and point to URL\n'
             text += '\n'
             text += '!active-comics\n'
             text += 'List active comics name and URL for this server\n'
@@ -164,7 +165,7 @@ class ComicsBot(discord.Client):
             text += 'shows this help section!\n'
             text += '\n'
             text += '\n'
-            text += 'Created by Dxcufgb'
+            text += 'Created by Dxcufgb - 2022'
             await channel.send(text)
                 
     
