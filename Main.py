@@ -2,10 +2,6 @@ import discord, os, requests, atoma, feedparser, datetime, logging, fileinput, a
 from pathlib import Path
 from discord.ext import commands
 
-class ComicObject():
-    URL: str
-    type: str
-
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger('discord')
 logger.setLevel(logging.DEBUG)
@@ -46,18 +42,18 @@ class ComicsBot(discord.Client):
         with open("% s" % guildId+'-Comics.json', 'w+') as jf:
             jf.write(json.dumps(availableComics[guildId], indent=4, sort_keys=True))
     
-    def fetchComic(self, co):
+    def fetchComic(self, url):
         response = ''
         feed = ''
         name = ''
         link = ''
-        if (co.type == '1'):
-            response = requests.get(co.url)
+        try:
+            response = requests.get(url)
             feed = atoma.parse_atom_bytes(response.content)
             name = feed.entries[0].title.value
-        elif (co.type == '2'):
+        except:
             ssl._create_default_https_context = ssl._create_unverified_context
-            feed = feedparser.parse(co.url)
+            feed = feedparser.parse(url)
             name = feed.entries[0].title
         link = feed.entries[0].links[0].href
         return name + " - " + link
@@ -122,10 +118,11 @@ class ComicsBot(discord.Client):
             splitMessage = inputMessage.split('--')
             values[splitMessage[0].split(' ')[0]] = splitMessage[0].split(' ')[1]
             values[splitMessage[1].split(' ')[0]] = splitMessage[1].split(' ')[1]
-            values[splitMessage[2].split(' ')[0]] = splitMessage[2].split(' ')[1]
             innerValues['URL'] = values['url']
-            innerValues['type'] = values['type']
             innerValues['LastURL'] = ''
+            logger.debug(innerValues)
+            logger.debug(values['name'])
+            logger.debug(availableComics)
             availableComics[incomingGuildId][values['name']] = innerValues
             logger.debug(availableComics)
             self.writeAvailableComicsToGuildJsonFile(incomingGuildId)
@@ -140,6 +137,35 @@ class ComicsBot(discord.Client):
         if message.content.startswith('!active-comics'):
             for comic in availableComics[incomingGuildId]:
                 await channel.send(comic+':'+availableComics[incomingGuildId][comic]['URL'])
+
+        if message.content.startswith('!help'):
+            text = '\n==============================ADMIN ONLY==============================\n'
+            text += '!sbc\n'
+            text += 'Set Bot Channel: assigns bot to current channel!\n'
+            text += 'All comics will be posted in this channel!\n'
+            text += '\n'
+            text += '!scc\n'
+            text += 'Show Current Channel: Shows current channel used by the bot!\n'
+            text += '\n'
+            text += '!dbc\n'
+            text += 'Delete Bot Channel: Deletes the assigned channel so the bot can be moved!\n'
+            text += '\n'
+            text += '==============================EVERYONE==============================\n'
+            text += '!add-comic --name [NAME] --url [URL TO RSS OR ATOM FEED]\n'
+            text += 'Add a commic with assigned name and point to URL\n'
+            text += '\n'
+            text += '!active-comics\n'
+            text += 'List active comics name and URL for this server\n'
+            text += '\n'
+            text += '!remove-comic [NAME]\n'
+            text += 'Remove comic with the assigned name, use "!active-comics" to list comics name and URLs\n'
+            text += '\n'
+            text += '!help\n'
+            text += 'shows this help section!\n'
+            text += '\n'
+            text += '\n'
+            text += 'Created by Dxcufgb'
+            await channel.send(text)
                 
     
     async def checkForDailyUpdates(self):
@@ -149,16 +175,13 @@ class ComicsBot(discord.Client):
                 logger.debug('running task for guild: '+"% s" % guild.id)
                 channel = self.get_channel(int(os.getenv('COMICS-CHANNEL-'+"% s" % guild.id)))
                 for co in availableComics[guild.id]:
-                    comic = ComicObject()
-                    comic.url = availableComics[guild.id][co]['URL']
-                    comic.type = availableComics[guild.id][co]['type']
-                    fetchedLink = self.fetchComic(comic)
+                    fetchedLink = self.fetchComic(availableComics[guild.id][co]['URL'])
                     if (fetchedLink != availableComics[guild.id][co]['LastURL']):
                         availableComics[guild.id][co]['LastURL'] = fetchedLink
                         await channel.send(fetchedLink)
                 if (availableComics != ''):
                     self.writeAvailableComicsToGuildJsonFile(guild.id)
-                    
+            logger.debug('Idling for 60 seconds...')
             await asyncio.sleep(60)
         
 client = ComicsBot()
