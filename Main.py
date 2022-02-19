@@ -144,13 +144,13 @@ class ComicsBot(discord.Client):
         if message.content.startswith('!active-comics'):
             text = ''
             for comic in guildComics[incomingGuildId]:
-                text += comic+':'+guildComics[incomingGuildId][comic]['URL']
-            await channel.send()
+                text += comic+':'+availableComics[comic]['URL']+'\n'
+            await channel.send(text)
         
         if message.content.startswith('!available-comics'):
             text = ''
             for comic in availableComics:
-                text += comic+':'+guildComics[comic]['URL']
+                text += comic+':'+availableComics[comic]['URL']+'\n'
             await channel.send(text)
 
         if message.content.startswith('!help'):
