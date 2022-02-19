@@ -187,12 +187,8 @@ class ComicsBot(discord.Client):
         await self.wait_until_ready()
         while not self.is_closed():
             logger.debug('Fetching comics links!')
-            logger.debug(availableComics)
             for comic in availableComics:
-                logger.debug(availableComics[comic])
-                logger.debug(availableComics[comic]['URL'])
                 fetchedLink = self.fetchComic(availableComics[comic]['URL'])
-                logger.debug('FetchedLink: '+fetchedLink)
                 if (fetchedLink != availableComics[comic]['LastURL']):
                     availableComics[comic]['LastURL'] = fetchedLink
             await self.sendToAllGuilds()
