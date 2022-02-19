@@ -1,6 +1,7 @@
 import discord, os, requests, atoma, feedparser, datetime, logging, fileinput, asyncio, json, ssl
 from pathlib import Path
 from discord.ext import commands
+from discord.utils import find
 
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger('discord')
@@ -41,6 +42,11 @@ class ComicsBot(discord.Client):
                     comics.write('{}')
                     guildComics[guild.id] = {}
         await self.checkForDailyUpdates()
+
+    async def on_guild_join(self, guild):
+        general = find(lambda x: x.name == 'general',  guild.text_channels)
+        if general and general.permissions_for(guild.me).send_messages:
+            await general.send('Hello!\n\nI\'m the ComicsBot!\n\nFor more information type "!help"!')
             
     def writeAvailableComicsToGuildJsonFile(self, guildId):
         with open("% s" % guildId+'-Comics.json', 'w+') as jf:
@@ -70,124 +76,129 @@ class ComicsBot(discord.Client):
         incomingChannelId = message.channel.id
         incomingChannelName = message.channel
         outgoingChannelId = os.getenv('COMICS-CHANNEL-'+"% s" % incomingGuildId)
-        
-        if message.content.startswith("!scc") and message.author.guild_permissions.administrator:
-            if(outgoingChannelId != None):
-                comicsChannel = self.get_channel(int(outgoingChannelId))
-                await comicsChannel.send('Channel '+"% s" % comicsChannel+' is registered as comics channel for current server!')
-            else:
-                await message.channel.send('No channel has been set as dedicated comics channel!')
-                
-        if message.content.startswith("!sbc") and message.author.guild_permissions.administrator:
-            if(outgoingChannelId != None):
-                channel = self.get_channel(int(incomingChannelId))
-                comicsChannel = self.get_channel(int(outgoingChannelId))
-                await channel.send('Channel '+"% s" % comicsChannel+' is already registered as comics channel for current server!')
-            else :
-                envFile = open('.env', 'a+')
-                envFile.write('COMICS-CHANNEL-'+"% s" % incomingGuildId+'='+"% s" % incomingChannelId+'\n')
-                os.environ['COMICS-CHANNEL-'+"% s" % incomingGuildId] = "% s" % incomingChannelId
-                channel = self.get_channel(int(incomingChannelId))
-                self.writeAvailableComicsToGuildJsonFile(incomingGuildId)
-                await channel.send('Setting up this channel ('+"% s" % incomingChannelName+') as dedicated comics channel!')
+        if outgoingChannelId == None or incomingChannelId == outgoingChannelId:
+            if message.content.startswith("!scc") and message.author.guild_permissions.administrator:
+                if(outgoingChannelId != None):
+                    comicsChannel = self.get_channel(int(outgoingChannelId))
+                    await comicsChannel.send('Channel '+"% s" % comicsChannel+' is registered as comics channel for current server!')
+                else:
+                    await message.channel.send('No channel has been set as dedicated comics channel!')
+                    
+            if message.content.startswith("!sbc") and message.author.guild_permissions.administrator:
+                if(outgoingChannelId != None):
+                    channel = self.get_channel(int(incomingChannelId))
+                    comicsChannel = self.get_channel(int(outgoingChannelId))
+                    await channel.send('Channel '+"% s" % comicsChannel+' is already registered as comics channel for current server!')
+                else :
+                    envFile = open('.env', 'a+')
+                    envFile.write('COMICS-CHANNEL-'+"% s" % incomingGuildId+'='+"% s" % incomingChannelId+'\n')
+                    os.environ['COMICS-CHANNEL-'+"% s" % incomingGuildId] = "% s" % incomingChannelId
+                    channel = self.get_channel(int(incomingChannelId))
+                    self.writeAvailableComicsToGuildJsonFile(incomingGuildId)
+                    await channel.send('Setting up this channel ('+"% s" % incomingChannelName+') as dedicated comics channel!\nThe bot will no longer listen to commands in other channels!')
 
-        if message.content.startswith("!dbc") and message.author.guild_permissions.administrator:
-            channel = self.get_channel(int(incomingChannelId))
-            if(outgoingChannelId == None):
-                await channel.send('Channel doesn\'t exists in registry!')
-            elif (int(incomingChannelId) != int(outgoingChannelId)): 
-                await channel.send('Channel '+"% s" % incomingChannelName+' is not registered as comics channel for current server!')
-                comicsChannel = self.get_channel(int(outgoingChannelId))
-                await channel.send('Channel '+"% s" % comicsChannel+' is registered as comics channel for current server!')
-            else :
-                del os.environ['COMICS-CHANNEL-'+"% s" % incomingGuildId]
-                envOutput = []
-                with open('.env', 'w+') as jf:
-                    for key in os.environ:
-                        if key == 'TOKEN' or key.startswith('COMICS-CHANNEL'):
-                            envOutput.append(key+':'+os.getenv(key))
-                    jf.write(''.join(envOutput))
-                await channel.send('Channel '+"% s" % incomingChannelName+' has been removed from registry!')
-                await channel.send('To register a channel please type "!sbc" in the desired channel!')
-        
-        if (outgoingChannelId == None):
-            channel = self.get_channel(int(incomingChannelId))
-        else:
-            channel = self.get_channel(int(outgoingChannelId))
+            if message.content.startswith("!dbc") and message.author.guild_permissions.administrator:
+                channel = self.get_channel(int(incomingChannelId))
+                if(outgoingChannelId == None):
+                    await channel.send('Channel doesn\'t exists in registry!')
+                elif (int(incomingChannelId) != int(outgoingChannelId)): 
+                    await channel.send('Channel '+"% s" % incomingChannelName+' is not registered as comics channel for current server!')
+                    comicsChannel = self.get_channel(int(outgoingChannelId))
+                    await channel.send('Channel '+"% s" % comicsChannel+' is registered as comics channel for current server!')
+                else :
+                    del os.environ['COMICS-CHANNEL-'+"% s" % incomingGuildId]
+                    envOutput = []
+                    with open('.env', 'w+') as jf:
+                        for key in os.environ:
+                            if key == 'TOKEN' or key.startswith('COMICS-CHANNEL'):
+                                envOutput.append(key+':'+os.getenv(key))
+                        jf.write(''.join(envOutput))
+                    await channel.send('Channel '+"% s" % incomingChannelName+' has been removed from registry!')
+                    await channel.send('To register a channel please type "!sbc" in the desired channel!')
             
-        if message.content.startswith('!add-comic'):
-            values = {}
-            comic = {}
-            innerValues = {}
-            guildValues = {}
-            inputMessage = message.content[13:]
-            splitMessage = inputMessage.split('--')
-            values[splitMessage[0].split(' ')[0]] = splitMessage[0].split(' ')[1]
-            values[splitMessage[1].split(' ')[0]] = splitMessage[1].split(' ')[1]
-            innerValues['URL'] = values['url']
-            innerValues['LastURL'] = ''
-            guildValues['LastURL'] = ''
-            guildComics[incomingGuildId][values['name']] = guildValues
-            if values['name'] not in availableComics:
-                availableComics[values['name']] = innerValues
-                with open('Comics.json', 'w+') as jf:
-                    jf.write(json.dumps(availableComics, indent=4, sort_keys=True))
-            self.writeAvailableComicsToGuildJsonFile(incomingGuildId)
-            await channel.send('Comic "'+ values['name'] + '" added!')
+            if (outgoingChannelId == None):
+                channel = self.get_channel(int(incomingChannelId))
+            else:
+                channel = self.get_channel(int(outgoingChannelId))
                 
-        if message.content.startswith('!remove-comic'):
-            inputMessage = message.content[14:]
-            del guildComics[incomingGuildId][inputMessage]
-            self.writeAvailableComicsToGuildJsonFile(incomingGuildId)
-            await channel.send('Comic with key '+inputMessage+' removed')
-                
-        if message.content.startswith('!active-comics'):
-            text = ''
-            for comic in guildComics[incomingGuildId]:
-                text += comic+':'+availableComics[comic]['URL']+'\n'
-            await channel.send(text)
-        
-        if message.content.startswith('!available-comics'):
-            text = ''
-            for comic in availableComics:
-                text += comic+':'+availableComics[comic]['URL']+'\n'
-            await channel.send(text)
+            if message.content.startswith('!add-comic'):
+                values = {}
+                comic = {}
+                innerValues = {}
+                guildValues = {}
+                inputMessage = message.content[13:]
+                splitMessage = inputMessage.split('--')
+                values[splitMessage[0].split(' ')[0]] = splitMessage[0].split(' ')[1]
+                values[splitMessage[1].split(' ')[0]] = splitMessage[1].split(' ')[1]
+                innerValues['URL'] = values['url']
+                innerValues['LastURL'] = ''
+                guildValues['LastURL'] = ''
+                guildComics[incomingGuildId][values['name']] = guildValues
+                if values['name'] not in availableComics:
+                    availableComics[values['name']] = innerValues
+                    with open('Comics.json', 'w+') as jf:
+                        jf.write(json.dumps(availableComics, indent=4, sort_keys=True))
+                self.writeAvailableComicsToGuildJsonFile(incomingGuildId)
+                await channel.send('Comic "'+ values['name'] + '" added!')
+                    
+            if message.content.startswith('!remove-comic'):
+                inputMessage = message.content[14:]
+                del guildComics[incomingGuildId][inputMessage]
+                self.writeAvailableComicsToGuildJsonFile(incomingGuildId)
+                await channel.send('Comic with key '+inputMessage+' removed')
+                    
+            if message.content.startswith('!active-comics'):
+                text = ''
+                for comic in guildComics[incomingGuildId]:
+                    text += comic+':'+availableComics[comic]['URL']+'\n'
+                await channel.send(text)
+            
+            if message.content.startswith('!available-comics'):
+                text = ''
+                for comic in availableComics:
+                    text += comic+':'+availableComics[comic]['URL']+'\n'
+                await channel.send(text)
 
-        if message.content.startswith('!help'):
-            text = '\n==============================ADMIN ONLY==============================\n'
-            text += '!sbc\n'
-            text += 'Set Bot Channel: assigns bot to current channel!\n'
-            text += 'All comics will be posted in this channel!\n'
-            text += '\n'
-            text += '!scc\n'
-            text += 'Show Current Channel: Shows current channel used by the bot!\n'
-            text += '\n'
-            text += '!dbc\n'
-            text += 'Delete Bot Channel: Deletes the assigned channel so the bot can be moved!\n'
-            text += '\n'
-            text += '==============================EVERYONE==============================\n'
-            text += '!add-comic --name [NAME] --url [URL TO RSS OR ATOM FEED]\n'
-            text += 'Add a comic with assigned name and point to URL\n'
-            text += '\n'
-            text += '!active-comics\n'
-            text += 'List active comics name and URL for this server\n'
-            text += '\n'
-            text += '!remove-comic [NAME]\n'
-            text += 'Remove comic with the assigned name, use "!active-comics" to list comics name and URLs\n'
-            text += '\n'
-            text += '!help\n'
-            text += 'shows this help section!\n'
-            text += '\n'
-            text += '\n'
-            text += 'Created by Dxcufgb - 2022'
-            await channel.send(text)
-                
+            if message.content.startswith('!help'):
+                text = '\n==============================ADMIN ONLY==============================\n'
+                text += '!sbc\n'
+                text += 'Set Bot Channel: assigns bot to current channel!\n'
+                text += 'All comics will be posted in this channel!\n'
+                text += 'The bot will stop listening to other channels on this server!\n'
+                text += '\n'
+                text += '!scc\n'
+                text += 'Show Current Channel: Shows current channel used by the bot!\n'
+                text += '\n'
+                text += '!dbc\n'
+                text += 'Delete Bot Channel: Deletes the assigned channel so the bot can be moved!\n'
+                text += 'The bot will start listening to other channels again!\n'
+                text += '\n'
+                text += '==============================EVERYONE==============================\n'
+                text += '!add-comic --name [NAME] --url [URL TO RSS OR ATOM FEED]\n'
+                text += 'Add a comic with assigned name and point to URL\n'
+                text += '\n'
+                text += '!active-comics\n'
+                text += 'List active comics name and URL for this server\n'
+                text += '\n'
+                text += '!available-comics\n'
+                text += 'List available comics name and URL for the bot\n'
+                text += '\n'
+                text += '!remove-comic [NAME]\n'
+                text += 'Remove comic with the assigned name, use "!active-comics" to list comics name and URLs\n'
+                text += '\n'
+                text += '!help\n'
+                text += 'shows this help section!\n'
+                text += '\n'
+                text += '\n'
+                text += 'Created by Dxcufgb - 2022'
+                await channel.send(text)
     
     async def checkForDailyUpdates(self):
         await self.wait_until_ready()
         while not self.is_closed():
             logger.debug('Fetching comics links!')
             for comic in availableComics:
+                logger.debug('Fetching '+comic+'!')
                 fetchedLink = self.fetchComic(availableComics[comic]['URL'])
                 if (fetchedLink != availableComics[comic]['LastURL']):
                     availableComics[comic]['LastURL'] = fetchedLink
