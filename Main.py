@@ -1,6 +1,4 @@
-import discord, os, requests, atoma, feedparser, datetime, logging, fileinput, asyncio, json, ssl
-from pathlib import Path
-from discord.ext import commands
+import discord, os, requests, atoma, feedparser, logging, asyncio, json, ssl, sys
 from discord.utils import find
 
 logging.basicConfig(level=logging.DEBUG)
@@ -77,7 +75,7 @@ class ComicsBot(discord.Client):
         return name + " - " + link
 
     async def on_message(self, message):
-        if message.author == client.user:
+        if message.author == client.user or message.guild == None:
             return
         
         incomingGuildId = message.guild.id
@@ -118,6 +116,11 @@ class ComicsBot(discord.Client):
                     await channel.send('Channel '+"% s" % incomingChannelName+' has been removed from registry!')
                     await channel.send('To register a channel please type "!sbc" in the desired channel!')
             
+            if message.content.startswith('!restart-bot') and message.author.display_name == 'dxcufgb':
+                channel = self.get_channel(int(outgoingChannelId))
+                await channel.send('Restarting...')
+                os.execv(sys.executable, ['python'] + sys.argv)
+                
             if (outgoingChannelId == None):
                 channel = self.get_channel(int(incomingChannelId))
             else:
