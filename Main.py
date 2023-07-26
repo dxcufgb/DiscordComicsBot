@@ -1,9 +1,15 @@
 import discord, os, requests, atoma, feedparser, logging, asyncio, json, ssl, sys
 from discord.utils import find
 
-logging.basicConfig(level=logging.DEBUG)
+with open('.env') as f:
+    for line in f:
+        name = line.split("=")[0]
+        value = line.split("=")[1]
+        os.environ[name] = value
+
+logging.basicConfig(level=os.getenv('LOG-LEVEL').strip())
 logger = logging.getLogger('discord')
-logger.setLevel(logging.DEBUG)
+logger.setLevel(os.getenv('LOG-LEVEL').strip())
 handler = logging.FileHandler(filename='discord.log', encoding='utf-8', mode='w')
 handler.setFormatter(logging.Formatter('%(asctime)s:%(levelname)s:%(name)s: %(message)s'))
 logger.addHandler(handler)
@@ -12,18 +18,12 @@ intents = discord.Intents(messages=True, guilds=True, reactions=True)
 availableComics = {}
 guildComics = {}
 
-with open('.env') as f:
-    for line in f:
-        name = line.split("=")[0]
-        value = line.split("=")[1]
-        os.environ[name] = value
-
 with open('comics.json') as f:
     availableComics = json.loads(f.read())
                 
 class ComicsBot(discord.Client):
-    def __inti__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs, intents=intents)
         
     async def on_ready(self):
         logger.debug("We have logged in as {0.user}".format(client))
