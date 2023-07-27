@@ -229,13 +229,13 @@ class ComicsBot(discord.Client):
     async def sendToAllGuilds(self):
         for guild in self.guilds:
             logger.debug('running task for guild: '+"% s" % guild.id)
-            #channel = self.get_channel(int(os.getenv('COMICS-CHANNEL-'+"% s" % guild.id).strip()))
-            #for co in guildComics[guild.id]:
-            #    if (co in guildComics[guild.id] and availableComics[co]['LastURL'] != guildComics[guild.id][co]['LastURL']):
-            #        guildComics[guild.id][co]['LastURL'] = availableComics[co]['LastURL']
-            #        await channel.send(guildComics[guild.id][co]['LastURL'])
-            #if (guildComics != ''):
-            #    self.writeAvailableComicsToGuildJsonFile(guild.id)
+            channel = self.get_channel(int(os.getenv('COMICS-CHANNEL-'+"% s" % guild.id).strip()))
+            for co in guildComics[guild.id]:
+               if (co in guildComics[guild.id] and availableComics[co]['LastURL'] != guildComics[guild.id][co]['LastURL']):
+                   guildComics[guild.id][co]['LastURL'] = availableComics[co]['LastURL']
+                   await channel.send(guildComics[guild.id][co]['LastURL'])
+            if (guildComics != ''):
+               self.writeAvailableComicsToGuildJsonFile(guild.id)
         
 client = ComicsBot()
 client.run(os.getenv('TOKEN'))
