@@ -21,7 +21,9 @@ intents = discord.Intents(messages=True, guilds=True, reactions=True)
 availableComics = {}
 guildComics = {}
 
-with open('comics.json') as f:
+dir = os.path.realpath(os.path.dirname(__file__))
+
+with open(os.path.join(dir, 'comics.json')) as f:
     availableComics = json.loads(f.read())
                 
 class ComicsBot(discord.Client):
@@ -37,10 +39,10 @@ class ComicsBot(discord.Client):
             if not os.path.exists("% s" % guild.id+'-Comics.json'):
                 mode = 'w+'
             if (mode == 'r'):
-                with open("% s" % guild.id+'-Comics.json', mode) as comics:
+                with open(os.path.join(dir, "% s" % guild.id+'-Comics.json'), mode) as comics:
                     guildComics[guild.id] = json.loads(comics.read())
             else:
-                with open("% s" % guild.id+'-Comics.json', mode) as comics:
+                with open(os.path.join(dir, "% s" % guild.id+'-Comics.json'), mode) as comics:
                     comics.write('{}')
                     guildComics[guild.id] = {}
         await self.checkForDailyUpdates()
@@ -51,12 +53,12 @@ class ComicsBot(discord.Client):
             await general.send('Hello!\n\nI\'m the ComicsBot!\n\nFor more information type "!help"!')
             
     def writeAvailableComicsToGuildJsonFile(self, guildId):
-        with open("% s" % guildId+'-Comics.json', 'w+') as jf:
+        with open(os.path.join(dir, "% s" % guildId+'-Comics.json'), 'w+') as jf:
             jf.write(json.dumps(guildComics[guildId], indent=4, sort_keys=True))
 
     def updateEnv(self):
         envOutput = []
-        with open('.env', 'w+') as jf:
+        with open(os.path.join(dir, '.env'), 'w+') as jf:
             for key in os.environ:
                 if key == 'TOKEN' or key.startswith('COMICS-CHANNEL'):
                     envOutput.append(key+':'+os.getenv(key))
@@ -152,7 +154,7 @@ class ComicsBot(discord.Client):
                     innerValues['LastURL'] = ''
                     guildComics[incomingGuildId][values['name']] = guildValues
                     availableComics[values['name']] = innerValues
-                    with open('Comics.json', 'w+') as jf:
+                    with open(os.path.join(dir, 'Comics.json'), 'w+') as jf:
                         jf.write(json.dumps(availableComics, indent=4, sort_keys=True))
                 else: 
                     guildComics[incomingGuildId][existingName] = guildValues
