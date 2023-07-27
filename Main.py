@@ -1,11 +1,8 @@
 import discord, os, requests, atoma, feedparser, logging, asyncio, json, ssl, sys
 from discord.utils import find
+from dotenv import load_dotenv
 
-with open('.env') as f:
-    for line in f:
-        name = line.split("=")[0]
-        value = line.split("=")[1]
-        os.environ[name] = value
+load_dotenv()
 
 logging.basicConfig(level=os.getenv('LOG-LEVEL').strip())
 logger = logging.getLogger('discord')
@@ -27,6 +24,7 @@ class ComicsBot(discord.Client):
         
     async def on_ready(self):
         logger.debug("We have logged in as {0.user}".format(client))
+        #logger.debug("check for comics every " + os.getenv('INTERVAL') + " seconds")
         for guild in self.guilds:
             logger.debug("starting for guild: "+guild.name)
             mode = 'r'
@@ -64,6 +62,7 @@ class ComicsBot(discord.Client):
         name = ''
         link = ''
         ssl._create_default_https_context = ssl._create_unverified_context
+        logger.debug('Trying to fetch {name} from {url}')
         try:
             feed = feedparser.parse(url)
             name = feed.entries[0].title
@@ -232,11 +231,11 @@ class ComicsBot(discord.Client):
             logger.debug('running task for guild: '+"% s" % guild.id)
             channel = self.get_channel(int(os.getenv('COMICS-CHANNEL-'+"% s" % guild.id).strip()))
             for co in guildComics[guild.id]:
-                if (co in guildComics[guild.id] and availableComics[co]['LastURL'] != guildComics[guild.id][co]['LastURL']):
-                    guildComics[guild.id][co]['LastURL'] = availableComics[co]['LastURL']
-                    await channel.send(guildComics[guild.id][co]['LastURL'])
+               if (co in guildComics[guild.id] and availableComics[co]['LastURL'] != guildComics[guild.id][co]['LastURL']):
+                   guildComics[guild.id][co]['LastURL'] = availableComics[co]['LastURL']
+                   await channel.send(guildComics[guild.id][co]['LastURL'])
             if (guildComics != ''):
-                self.writeAvailableComicsToGuildJsonFile(guild.id)
+               self.writeAvailableComicsToGuildJsonFile(guild.id)
         
 client = ComicsBot()
 client.run(os.getenv('TOKEN'))
