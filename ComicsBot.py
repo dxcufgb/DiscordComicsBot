@@ -13,7 +13,7 @@ logger.addHandler(handler)
 
 workingDir = os.getenv('WORKING_DIRECTORY')
 
-if (workingDir != 'None'):
+if (workingDir != None):
     logger.info("Working directory set to: " + workingDir)
     os.chdir(workingDir)
 
@@ -30,7 +30,7 @@ class ComicsBot(discord.Client):
         
     async def on_ready(self):
         logger.debug("We have logged in as {0.user}".format(client))
-        #logger.debug("check for comics every " + os.getenv('INTERVAL') + " seconds")
+        logger.debug("check for comics every " + os.getenv('INTERVAL') + " seconds")
         for guild in self.guilds:
             logger.debug("starting for guild: "+guild.name)
             mode = 'r'
@@ -229,8 +229,8 @@ class ComicsBot(discord.Client):
                 if (fetchedLink != availableComics[comic]['LastURL']):
                     availableComics[comic]['LastURL'] = fetchedLink
             await self.sendToAllGuilds()
-            logger.debug('Idling for 60 seconds...')
-            await asyncio.sleep(60)
+            logger.debug('Idling for ' + os.getenv('INTERVAL') + ' seconds...')
+            await asyncio.sleep(int(os.getenv('INTERVAL')))
 
     async def sendToAllGuilds(self):
         for guild in self.guilds:
