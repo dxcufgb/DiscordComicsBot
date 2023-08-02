@@ -188,7 +188,7 @@ class ComicsBot(discord.Client):
                 await channel.send(text)
 
             if message.content.startswith('!help'):
-                text = ""
+                text = "|\n"
                 if message.author.guild_permissions.administrator :
                     text += '==============================ADMIN ONLY==============================\n'
                     text += '!sbc\n'
@@ -233,6 +233,8 @@ class ComicsBot(discord.Client):
             for comic in availableComics:
                 logger.debug('Fetching '+comic+'!')
                 fetchedLink = await self.fetchComic(availableComics[comic]['URL'])
+                if ('lastURL' not in availableComics[comic]):
+                    availableComics[comic]['LastURL'] = fetchedLink
                 if (fetchedLink != availableComics[comic]['LastURL']):
                     availableComics[comic]['LastURL'] = fetchedLink
             await self.sendToAllGuilds()
