@@ -69,15 +69,22 @@ class ComicsBot(discord.Client):
         link = ''
         ssl._create_default_https_context = ssl._create_unverified_context
         logger.debug('Trying to fetch from ' + url)
+        foundLink = True
         try:
             feed = feedparser.parse(url)
             name = feed.entries[0].title
         except:
-            response = requests.get(url)
-            feed = atoma.parse_atom_bytes(response.content)
-            name = feed.entries[0].title.value
-        link = feed.entries[0].links[0].href
-        return name + " - " + link
+            try:
+                response = requests.get(url)
+                feed = atoma.parse_atom_bytes(response.content)
+                name = feed.entries[0].title.value
+            except: 
+                foundLink = False
+        if (foundLink):
+            link = feed.entries[0].links[0].href
+            return name + " - " + link
+        else :
+            return ''
 
     async def on_message(self, message):
         if message.author == client.user or message.guild == None:
@@ -233,11 +240,12 @@ class ComicsBot(discord.Client):
             for comic in availableComics:
                 logger.debug('Fetching '+comic+'!')
                 fetchedLink = await self.fetchComic(availableComics[comic]['URL'])
-                if ('lastURL' not in availableComics[comic]):
-                    availableComics[comic]['LastURL'] = fetchedLink
-                if (fetchedLink != availableComics[comic]['LastURL']):
-                    availableComics[comic]['LastURL'] = fetchedLink
-            await self.sendToAllGuilds()
+                if (fetchedLink != ''):
+                    if ('lastURL' not in availableComics[comic]):
+                        availableComics[comic]['LastURL'] = fetchedLink
+                    if (fetchedLink != availableComics[comic]['LastURL']):
+                        availableComics[comic]['LastURL'] = fetchedLink
+                    await self.sendToAllGuilds()
             logger.debug('Idling for ' + os.getenv('INTERVAL') + ' seconds...')
             await asyncio.sleep(int(os.getenv('INTERVAL')))
 
