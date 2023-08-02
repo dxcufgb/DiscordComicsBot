@@ -1,4 +1,4 @@
-import discord, os, requests, atoma, feedparser, logging, asyncio, json, ssl, sys
+import discord, os, requests, atoma, feedparser, logging, asyncio, json, ssl, sys, datetime
 from discord.utils import find
 from dotenv import load_dotenv
 
@@ -149,10 +149,9 @@ class ComicsBot(discord.Client):
                         existingName = comic
                 if not exists:
                     innerValues['URL'] = values['url']
-                    innerValues['LastURL'] = ''
                     guildComics[incomingGuildId][values['name']] = guildValues
                     availableComics[values['name']] = innerValues
-                    with open(os.path.join(dir, 'Comics.json'), 'w+') as jf:
+                    with open(os.path.join(dir, 'comics.json'), 'w+') as jf:
                         jf.write(json.dumps(availableComics, indent=4, sort_keys=True))
                 else: 
                     guildComics[incomingGuildId][existingName] = guildValues
@@ -162,10 +161,13 @@ class ComicsBot(discord.Client):
             if message.content.startswith('!subscribe-comic'):
                 guildValues = {}
                 guildValues['LastURL'] = ''
-                inputMessage = message.content[19:]
-                guildComics[incomingGuildId][inputMessage] = guildValues
-                self.writeAvailableComicsToGuildJsonFile(incomingGuildId)
-                await channel.send('Subscribed to comic "'+ values['name'] + '"!')
+                inputMessage = message.content[17:]
+                if (inputMessage in availableComics):
+                    guildComics[incomingGuildId][inputMessage] = guildValues
+                    self.writeAvailableComicsToGuildJsonFile(incomingGuildId)
+                    await channel.send('Subscribed to comic "'+ inputMessage + '"!')
+                else :
+                    await channel.send('Could not find comic "'+ inputMessage + '"!\n Did you check !available-comics for the correct name?')
                     
             if message.content.startswith('!remove-comic'):
                 inputMessage = message.content[14:]
@@ -186,20 +188,22 @@ class ComicsBot(discord.Client):
                 await channel.send(text)
 
             if message.content.startswith('!help'):
-                text = '\n==============================ADMIN ONLY==============================\n'
-                text += '!sbc\n'
-                text += 'Set Bot Channel: assigns bot to current channel!\n'
-                text += 'All comics will be posted in this channel!\n'
-                text += 'The bot will stop listening to other channels on this server!\n'
-                text += '\n'
-                text += '!scc\n'
-                text += 'Show Current Channel: Shows current channel used by the bot!\n'
-                text += '\n'
-                text += '!dbc\n'
-                text += 'Delete Bot Channel: Deletes the assigned channel so the bot can be moved!\n'
-                text += 'The bot will start listening to other channels again!\n'
-                text += '\n'
-                text += '==============================EVERYONE==============================\n'
+                text = ""
+                if message.author.guild_permissions.administrator :
+                    text += '==============================ADMIN ONLY==============================\n'
+                    text += '!sbc\n'
+                    text += 'Set Bot Channel: assigns bot to current channel!\n'
+                    text += 'All comics will be posted in this channel!\n'
+                    text += 'The bot will stop listening to other channels on this server!\n'
+                    text += '\n'
+                    text += '!scc\n'
+                    text += 'Show Current Channel: Shows current channel used by the bot!\n'
+                    text += '\n'
+                    text += '!dbc\n'
+                    text += 'Delete Bot Channel: Deletes the assigned channel so the bot can be moved!\n'
+                    text += 'The bot will start listening to other channels again!\n'
+                    text += '\n'
+                    text += '==============================EVERYONE==============================\n'
                 text += '!add-comic --name [NAME] --url [URL TO RSS OR ATOM FEED]\n'
                 text += 'Add a comic with assigned name and point to URL\n'
                 text += '\n'
@@ -209,6 +213,9 @@ class ComicsBot(discord.Client):
                 text += '!available-comics\n'
                 text += 'List available comics name and URL for the bot\n'
                 text += '\n'
+                text += '!subscribe-comic [NAME]\n'
+                text += 'Subscribe to comic using the name from !available-comics\n'
+                text += '\n'
                 text += '!remove-comic [NAME]\n'
                 text += 'Remove comic with the assigned name, use "!active-comics" to list comics name and URLs\n'
                 text += '\n'
@@ -216,7 +223,7 @@ class ComicsBot(discord.Client):
                 text += 'shows this help section!\n'
                 text += '\n'
                 text += '\n'
-                text += 'Created by Dxcufgb - 2022'
+                text += 'Created by Dxcufgb (2022 - ' + str(datetime.date.today().year) + ')'
                 await channel.send(text)
     
     async def checkForDailyUpdates(self):
