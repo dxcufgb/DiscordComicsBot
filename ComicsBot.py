@@ -4,18 +4,18 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-logging.basicConfig(level=os.getenv('LOG-LEVEL').strip())
+dir = os.path.realpath(os.path.dirname(__file__))
+
+logging.basicConfig(level=os.environ.get('LOGLEVEL', os.getenv('LOG-LEVEL')))
 logger = logging.getLogger('discord')
 logger.setLevel(os.getenv('LOG-LEVEL').strip())
-handler = logging.FileHandler(filename='discord.log', encoding='utf-8', mode='w')
+handler = logging.FileHandler(filename=str(os.path.join(dir, 'discord.log')), encoding='utf-8', mode='w')
 handler.setFormatter(logging.Formatter('%(asctime)s:%(levelname)s:%(name)s: %(message)s'))
 logger.addHandler(handler)
-
+print('logger level: ' + str(logger.level))
 intents = discord.Intents(messages=True, guilds=True, reactions=True)
 availableComics = {}
 guildComics = {}
-
-dir = os.path.realpath(os.path.dirname(__file__))
 
 with open(os.path.join(dir, 'comics.json')) as f:
     availableComics = json.loads(f.read())
@@ -25,10 +25,10 @@ class ComicsBot(discord.Client):
         super().__init__(*args, **kwargs, intents=intents)
         
     async def on_ready(self):
-        logger.debug("We have logged in as {0.user}".format(client))
-        logger.debug("check for comics every " + os.getenv('INTERVAL') + " seconds")
+        print("We have logged in as {0.user}".format(client))
+        print("check for comics every " + os.getenv('INTERVAL') + " seconds")
         for guild in self.guilds:
-            logger.debug("starting for guild: "+guild.name)
+            print("starting for guild: "+guild.name)
             mode = 'r'
             if not os.path.exists("% s" % guild.id+'-Comics.json'):
                 mode = 'w+'
@@ -47,8 +47,10 @@ class ComicsBot(discord.Client):
             await general.send('Hello!\n\nI\'m the ComicsBot!\n\nFor more information type "!help"!')
             
     def writeAvailableComicsToGuildJsonFile(self, guildId):
-        with open(os.path.join(dir, "% s" % guildId+'-Comics.json'), 'w+') as jf:
-            jf.write(json.dumps(guildComics[guildId], indent=4, sort_keys=True))
+        if (guildComics[guildId]) :
+            print("Writing to guild file! \n" + json.dumps(guildComics[guildId]))
+            with open(os.path.join(dir, "% s" % guildId+'-Comics.json'), 'w+') as jf:
+                jf.write(json.dumps(guildComics[guildId], indent=4, sort_keys=True))
 
     def updateEnv(self):
         envOutput = []
@@ -64,7 +66,7 @@ class ComicsBot(discord.Client):
         name = ''
         link = ''
         ssl._create_default_https_context = ssl._create_unverified_context
-        logger.debug('Trying to fetch {name} from {url}')
+        print('Trying to fetch from ' + url)
         try:
             feed = feedparser.parse(url)
             name = feed.entries[0].title
@@ -218,25 +220,26 @@ class ComicsBot(discord.Client):
     async def checkForDailyUpdates(self):
         await self.wait_until_ready()
         while not self.is_closed():
-            logger.debug('Fetching comics links!')
+            print('Fetching comics links!')
             for comic in availableComics:
-                logger.debug('Fetching '+comic+'!')
+                print('Fetching '+comic+'!')
                 fetchedLink = await self.fetchComic(availableComics[comic]['URL'])
                 if (fetchedLink != availableComics[comic]['LastURL']):
                     availableComics[comic]['LastURL'] = fetchedLink
             await self.sendToAllGuilds()
-            logger.debug('Idling for ' + os.getenv('INTERVAL') + ' seconds...')
+            print('Idling for ' + os.getenv('INTERVAL') + ' seconds...')
             await asyncio.sleep(int(os.getenv('INTERVAL')))
 
     async def sendToAllGuilds(self):
         for guild in self.guilds:
-            logger.debug('running task for guild: '+"% s" % guild.id)
+            print('running task for guild: '+"% s" % guild.id)
             channel = self.get_channel(int(os.getenv('COMICS-CHANNEL-'+"% s" % guild.id).strip()))
             for co in guildComics[guild.id]:
                if (co in guildComics[guild.id] and availableComics[co]['LastURL'] != guildComics[guild.id][co]['LastURL']):
                    guildComics[guild.id][co]['LastURL'] = availableComics[co]['LastURL']
+                   print('Sending URL: ' + guildComics[guild.id][co]['LastURL'])
                    await channel.send(guildComics[guild.id][co]['LastURL'])
-            if (guildComics != ''):
+            if (guildComics[guild.id] != ''):
                self.writeAvailableComicsToGuildJsonFile(guild.id)
         
 client = ComicsBot()
