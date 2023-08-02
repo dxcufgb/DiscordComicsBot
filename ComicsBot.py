@@ -247,7 +247,7 @@ class ComicsBot(discord.Client):
                if (co in guildComics[guild.id] and availableComics[co]['LastURL'] != guildComics[guild.id][co]['LastURL']):
                    guildComics[guild.id][co]['LastURL'] = availableComics[co]['LastURL']
                    logger.debug('Sending URL: ' + guildComics[guild.id][co]['LastURL'])
-                   #await channel.send(guildComics[guild.id][co]['LastURL'])
+                   await channel.send(guildComics[guild.id][co]['LastURL'])
             if (guildComics[guild.id] != ''):
                self.writeAvailableComicsToGuildJsonFile(guild.id)
         
