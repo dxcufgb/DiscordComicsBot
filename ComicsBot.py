@@ -197,6 +197,7 @@ class ComicsBot(discord.Client):
             if message.content.startswith('!help'):
                 text = "|\n"
                 if message.author.guild_permissions.administrator :
+                    text += '===================LAST CHANGE MADE 2023-12-23 18:34=================='
                     text += '==============================ADMIN ONLY==============================\n'
                     text += '!sbc\n'
                     text += 'Set Bot Channel: assigns bot to current channel!\n'
@@ -239,13 +240,16 @@ class ComicsBot(discord.Client):
             logger.debug('Fetching comics links!')
             for comic in availableComics:
                 logger.debug('Fetching '+comic+'!')
-                fetchedLink = await self.fetchComic(availableComics[comic]['URL'])
-                if (fetchedLink != ''):
-                    if ('lastURL' not in availableComics[comic]):
-                        availableComics[comic]['LastURL'] = fetchedLink
-                    if (fetchedLink != availableComics[comic]['LastURL']):
-                        availableComics[comic]['LastURL'] = fetchedLink
-                    await self.sendToAllGuilds()
+                try:
+                    fetchedLink = await self.fetchComic(availableComics[comic]['URL'])
+                    if (fetchedLink != ''):
+                        if ('lastURL' not in availableComics[comic]):
+                            availableComics[comic]['LastURL'] = fetchedLink
+                        if (fetchedLink != availableComics[comic]['LastURL']):
+                            availableComics[comic]['LastURL'] = fetchedLink
+                        await self.sendToAllGuilds()
+                except:
+                    logger.error("error occured fetching comic: "+comic)
             logger.debug('Idling for ' + os.getenv('INTERVAL') + ' seconds...')
             await asyncio.sleep(int(os.getenv('INTERVAL')))
 
