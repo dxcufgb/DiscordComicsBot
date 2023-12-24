@@ -197,7 +197,7 @@ class ComicsBot(discord.Client):
             if message.content.startswith('!help'):
                 text = "|\n"
                 if message.author.guild_permissions.administrator :
-                    text += '===================LAST CHANGE MADE 2023-12-23 18:34=================='
+                    text += '=====================LAST CHANGE MADE 2023-12-24====================='
                     text += '==============================ADMIN ONLY==============================\n'
                     text += '!sbc\n'
                     text += 'Set Bot Channel: assigns bot to current channel!\n'
@@ -233,6 +233,10 @@ class ComicsBot(discord.Client):
                 text += '\n'
                 text += 'Created by Dxcufgb (2022 - ' + str(datetime.date.today().year) + ')'
                 await channel.send(text)
+
+            if message.content.startswith('!show-env') and message.author.display_name == 'dxcufgb':
+                os.environ
+                await channel.send(os.environ)
     
     async def checkForDailyUpdates(self):
         await self.wait_until_ready()
@@ -251,6 +255,10 @@ class ComicsBot(discord.Client):
                 except:
                     logger.error("error occured fetching comic: "+comic)
             logger.debug('Idling for ' + os.getenv('INTERVAL') + ' seconds...')
+            if os.getenv("CHRISTMAS_WISH") == 0 and datetime.today().strftime('%m-%d-%H') == '12-24-11':
+                os.environ["CHRISTMAS_WISH"] = 1
+                self.updateEnv()
+                await self.sendChristmasWishToAllGuilds()
             await asyncio.sleep(int(os.getenv('INTERVAL')))
 
     async def sendToAllGuilds(self):
@@ -264,6 +272,12 @@ class ComicsBot(discord.Client):
                    await channel.send(guildComics[guild.id][co]['LastURL'])
             if (guildComics[guild.id] != ''):
                self.writeAvailableComicsToGuildJsonFile(guild.id)
+
+    async def sendChristmasWishToAllGuilds(self):
+        for guild in self.guilds:
+            logger.debug('running christmas task for guild: '+"% s" % guild.id)
+            channel = self.get_channel(int(os.getenv('COMICS-CHANNEL-'+"% s" % guild.id).strip()))
+            await channel.send("https://tenor.com/view/merry-christmas-gif-church-gif-10346745427738870662")
         
 client = ComicsBot()
 client.run(os.getenv('TOKEN'))
