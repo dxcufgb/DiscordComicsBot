@@ -1,4 +1,5 @@
-import discord, os, requests, atoma, feedparser, logging, asyncio, json, ssl, sys, datetime
+import discord, os, requests, atoma, feedparser, logging, asyncio, json, ssl, sys
+from datetime import datetime
 from discord.utils import find
 from dotenv import load_dotenv
 
@@ -231,7 +232,7 @@ class ComicsBot(discord.Client):
                 text += 'shows this help section!\n'
                 text += '\n'
                 text += '\n'
-                text += 'Created by Dxcufgb (2022 - ' + str(datetime.date.today().year) + ')'
+                text += 'Created by Dxcufgb (2022 - ' + str(datetime.today().year) + ')'
                 await channel.send(text)
 
             if message.content.startswith('!show-env') and message.author.display_name == 'dxcufgb':
@@ -254,11 +255,11 @@ class ComicsBot(discord.Client):
                         await self.sendToAllGuilds()
                 except:
                     logger.error("error occured fetching comic: "+comic)
-            logger.debug('Idling for ' + os.getenv('INTERVAL') + ' seconds...')
             if os.getenv("CHRISTMAS_WISH") == 0 and datetime.today().strftime('%m-%d-%H') == '12-24-11':
                 os.environ["CHRISTMAS_WISH"] = 1
                 self.updateEnv()
                 await self.sendChristmasWishToAllGuilds()
+            logger.debug('Idling for ' + os.getenv('INTERVAL') + ' seconds...')
             await asyncio.sleep(int(os.getenv('INTERVAL')))
 
     async def sendToAllGuilds(self):
