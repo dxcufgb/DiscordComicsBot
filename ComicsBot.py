@@ -257,7 +257,8 @@ class ComicsBot(discord.Client):
                     self.updateComicsFile()
                     await self.sendToAllGuilds()
                 
-            if os.getenv("CHRISTMAS_WISH") == 0 and datetime.today().strftime('%m-%d-%H') == '12-24-11':
+            hour = datetime.today().hour            
+            if os.getenv("CHRISTMAS_WISH") == '0' and datetime.today().strftime('%m-%d') == '12-24' and hour > 11 and hour < 15 :
                 os.environ["CHRISTMAS_WISH"] = 1
                 self.updateEnv()
                 await self.sendChristmasWishToAllGuilds()
