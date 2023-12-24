@@ -159,8 +159,7 @@ class ComicsBot(discord.Client):
                     innerValues['URL'] = values['url']
                     guildComics[incomingGuildId][values['name']] = guildValues
                     availableComics[values['name']] = innerValues
-                    with open(os.path.join(dir, 'comics.json'), 'w+') as jf:
-                        jf.write(json.dumps(availableComics, indent=4, sort_keys=True))
+                    self.updateComicsFile()
                 else: 
                     guildComics[incomingGuildId][existingName] = guildValues
                 self.writeAvailableComicsToGuildJsonFile(incomingGuildId)
@@ -247,14 +246,17 @@ class ComicsBot(discord.Client):
                 logger.debug('Fetching '+comic+'!')
                 try:
                     fetchedLink = await self.fetchComic(availableComics[comic]['URL'])
-                    if (fetchedLink != ''):
-                        if ('lastURL' not in availableComics[comic]):
-                            availableComics[comic]['LastURL'] = fetchedLink
-                        if (fetchedLink != availableComics[comic]['LastURL']):
-                            availableComics[comic]['LastURL'] = fetchedLink
-                        await self.sendToAllGuilds()
                 except:
-                    logger.error("error occured fetching comic: "+comic)
+                    logger.error("error occured fetching comic: "+comic+" with URL: "+availableComics[comic]['URL'])
+                    fetchedLink = availableComics[comic]['LastURL']
+                if (fetchedLink != ''):
+                    if ('lastURL' not in availableComics[comic]):
+                        availableComics[comic]['LastURL'] = fetchedLink
+                    if (fetchedLink != availableComics[comic]['LastURL']):
+                        availableComics[comic]['LastURL'] = fetchedLink
+                    self.updateComicsFile()
+                    await self.sendToAllGuilds()
+                
             if os.getenv("CHRISTMAS_WISH") == 0 and datetime.today().strftime('%m-%d-%H') == '12-24-11':
                 os.environ["CHRISTMAS_WISH"] = 1
                 self.updateEnv()
@@ -279,6 +281,10 @@ class ComicsBot(discord.Client):
             logger.debug('running christmas task for guild: '+"% s" % guild.id)
             channel = self.get_channel(int(os.getenv('COMICS-CHANNEL-'+"% s" % guild.id).strip()))
             await channel.send("https://tenor.com/view/merry-christmas-gif-church-gif-10346745427738870662")
+    
+    def updateComicsFile(self):
+        with open(os.path.join(dir, 'comics.json'), 'w+') as jf:
+            jf.write(json.dumps(availableComics, indent=4, sort_keys=True))
         
 client = ComicsBot()
 client.run(os.getenv('TOKEN'))
