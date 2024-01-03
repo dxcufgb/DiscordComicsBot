@@ -262,6 +262,9 @@ class ComicsBot(discord.Client):
                 os.environ["CHRISTMAS_WISH"] = '1'
                 self.updateEnv()
                 await self.sendChristmasWishToAllGuilds()
+            if os.getenv("CHRISTMAS_WISH") == '1' and datetime.today().strftime('%m') == '01' :
+                os.environ["CHRISTMAS_WISH"] = "0"
+                self.updateEnv()
             logger.debug('Idling for ' + os.getenv('INTERVAL') + ' seconds...')
             await asyncio.sleep(int(os.getenv('INTERVAL')))
 
@@ -271,9 +274,9 @@ class ComicsBot(discord.Client):
             channel = self.get_channel(int(os.getenv('COMICS-CHANNEL-'+"% s" % guild.id).strip()))
             for co in guildComics[guild.id]:
                if (co in guildComics[guild.id] and availableComics[co]['LastURL'] != guildComics[guild.id][co]['LastURL']):
+                   logger.debug('Sending URL: ' + availableComics[co]['LastURL'])
+                   await channel.send(availableComics[co]['LastURL'])
                    guildComics[guild.id][co]['LastURL'] = availableComics[co]['LastURL']
-                   logger.debug('Sending URL: ' + guildComics[guild.id][co]['LastURL'])
-                   await channel.send(guildComics[guild.id][co]['LastURL'])
             if (guildComics[guild.id] != ''):
                self.writeAvailableComicsToGuildJsonFile(guild.id)
 
