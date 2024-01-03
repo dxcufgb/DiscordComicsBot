@@ -197,7 +197,7 @@ class ComicsBot(discord.Client):
             if message.content.startswith('!help'):
                 text = "|\n"
                 if message.author.guild_permissions.administrator :
-                    text += '=====================LAST CHANGE MADE 2023-12-24====================='
+                    text += '=====================LAST CHANGE MADE 2024-01-03====================='
                     text += '==============================ADMIN ONLY==============================\n'
                     text += '!sbc\n'
                     text += 'Set Bot Channel: assigns bot to current channel!\n'
