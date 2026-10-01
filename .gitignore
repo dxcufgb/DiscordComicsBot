@@ -1,3 +1,15 @@
-*.json
-*.env
+# Bot data and secrets
+.env
+.env.broken-backup
+state.json
+.state-*.tmp
+comics.json
+*-Comics.json
 *.log
+*.log.*
+
+# Python
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
