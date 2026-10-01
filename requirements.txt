@@ -1,0 +1,5 @@
+discord.py>=2.0
+atoma
+feedparser
+python-dotenv
+requests
