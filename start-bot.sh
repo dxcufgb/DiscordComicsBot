@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Start script for ComicsBot on Linux/macOS.
 #
-#   ./start-bot.sh                   Set up the virtualenv (first run) and start the bot
+#   ./start-bot.sh                   Set up the virtualenv (first run) and start the bot.
+#                                    The bot is restarted automatically if it crashes.
 #   ./start-bot.sh install-service   Register a systemd service so the bot starts on boot
 #   ./start-bot.sh remove-service    Remove that systemd service
 #
@@ -14,13 +15,27 @@ VENV_DIR="$BOT_DIR/.venv"
 SERVICE_NAME="comicsbot"
 SERVICE_FILE="/etc/systemd/system/$SERVICE_NAME.service"
 PYTHON="${PYTHON:-python3}"
+# Exit codes used by ComicsBot.py
+EXIT_RESTART=75
+EXIT_CONFIG_ERROR=78
 
-# The bot reads comics.json and <guild>-Comics.json relative to the working
-# directory in places, so always run it from its own folder.
 cd "$BOT_DIR"
 
+python_ok() {
+    "$1" -c 'import sys; sys.exit(sys.version_info < (3, 10))' 2>/dev/null
+}
+
 setup_venv() {
+    if [ -x "$VENV_DIR/bin/python" ] && ! python_ok "$VENV_DIR/bin/python"; then
+        echo "Existing virtual environment uses Python < 3.10, recreating it ..."
+        rm -rf "$VENV_DIR"
+    fi
     if [ ! -x "$VENV_DIR/bin/python" ]; then
+        if ! python_ok "$PYTHON"; then
+            echo "ComicsBot needs Python 3.10 or newer ('$PYTHON' is missing or too old)." >&2
+            echo "Install a newer Python or point PYTHON=/path/to/python3.x at one." >&2
+            exit 1
+        fi
         echo "Creating virtual environment in $VENV_DIR ..."
         "$PYTHON" -m venv "$VENV_DIR"
     fi
@@ -33,15 +48,28 @@ setup_venv() {
     fi
 }
 
-check_files() {
-    local missing=0
-    for f in .env comics.json; do
-        if [ ! -f "$f" ]; then
-            echo "Missing $BOT_DIR/$f" >&2
-            missing=1
-        fi
+run_bot() {
+    if [ ! -f .env ]; then
+        echo "Missing $BOT_DIR/.env - copy .env.example to .env and fill in DISCORD_TOKEN." >&2
+        exit 1
+    fi
+    setup_venv
+    while true; do
+        set +e
+        "$VENV_DIR/bin/python" ComicsBot.py
+        code=$?
+        set -e
+        case "$code" in
+            0) exit 0 ;;
+            "$EXIT_CONFIG_ERROR")
+                echo "Configuration error, not restarting. Fix .env and start again." >&2
+                exit "$code" ;;
+            "$EXIT_RESTART") echo "Restarting ComicsBot ..." ;;
+            *)
+                echo "ComicsBot exited with code $code, restarting in 10 seconds (Ctrl+C to stop) ..." >&2
+                sleep 10 ;;
+        esac
     done
-    [ "$missing" -eq 0 ] || { echo "See .env.example for the required settings." >&2; exit 1; }
 }
 
 install_service() {
@@ -61,8 +89,9 @@ Type=simple
 User=$run_user
 WorkingDirectory=$BOT_DIR
 ExecStart=$BOT_DIR/start-bot.sh
-Restart=always
+Restart=on-failure
 RestartSec=10
+RestartPreventExitStatus=$EXIT_CONFIG_ERROR
 
 [Install]
 WantedBy=multi-user.target
@@ -83,13 +112,9 @@ remove_service() {
 }
 
 case "${1:-run}" in
-    run)
-        check_files
-        setup_venv
-        exec "$VENV_DIR/bin/python" ComicsBot.py
-        ;;
+    run) run_bot ;;
     install-service) install_service ;;
-    remove-service)  remove_service ;;
+    remove-service) remove_service ;;
     *)
         echo "Usage: $0 [run|install-service|remove-service]" >&2
         exit 2

@@ -1,5 +1,6 @@
-discord.py>=2.0
-atoma
-feedparser
-python-dotenv
-requests
+# Runtime dependencies, pinned so every install is identical.
+# Renovate (renovate.json) opens a PR whenever a new version is released.
+aiohttp==3.14.3
+discord.py==2.7.1
+feedparser==6.0.14
+python-dotenv==1.2.4

@@ -1,0 +1,18 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended", ":dependencyDashboard"],
+  "schedule": ["before 6am on monday"],
+  "timezone": "Europe/Stockholm",
+  "packageRules": [
+    {
+      "description": "Group the dev tools so they arrive as one PR",
+      "matchFileNames": ["requirements-dev.txt"],
+      "groupName": "dev tools"
+    },
+    {
+      "description": "Group GitHub Actions updates",
+      "matchManagers": ["github-actions"],
+      "groupName": "github actions"
+    }
+  ]
+}

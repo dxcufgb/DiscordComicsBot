@@ -1,5 +1,8 @@
 # ComicsBot audit (2026-10-01)
 
+> **Status:** all 28 items below are fixed in the 2.0 rewrite (`comicsbot/` package, slash commands,
+> `state.json`). See "2.0 changes" at the end for how each one was addressed and the dependency update results.
+
 Line numbers refer to `ComicsBot.py` at commit `d852eca`. Findings are ordered by severity.
 
 ## Critical: security
@@ -58,3 +61,40 @@ Line numbers refer to `ComicsBot.py` at commit `d852eca`. Findings are ordered b
 | Windows | `start-bot.bat` (restarts the bot automatically if it crashes) | `start-bot.bat install` (Task Scheduler, at logon, no admin needed) |
 
 On first run, both scripts create a `.venv`. They reinstall `requirements.txt` only when it changes, check that `.env` and `comics.json` exist, and always run the bot from its own folder.
+
+## 2.0 changes
+
+| Item | Fix |
+|---|---|
+| 1, 2 | `!show-env` removed. Owner-only commands check Discord user IDs (`OWNER_IDS`, or the application owner/team) |
+| 3 | No TLS override; feeds are fetched with normal certificate checks |
+| 4 | `/comics-admin add` needs Manage Server, refuses duplicate names, validates the feed first, and blocks private/local addresses on every redirect hop (`ALLOW_PRIVATE_FEED_URLS` to opt out) |
+| 5, 17, 20 | The bot never writes `.env`. Runtime data lives in `state.json`. A corrupted 1.x `.env` is repaired on start. Settings have defaults and give clear errors (exit code 78) |
+| 6 | All paths are absolute (`Path(__file__)`) |
+| 7, 8 | A server without a channel, or with a deleted channel or missing permissions, is skipped and logged; it no longer stops the loop |
+| 9, 10 | One `tasks.loop` started in `setup_hook`. Each cycle fetches each feed once, concurrently, then delivers per server |
+| 11, 12, 16 | Atomic `state.json` writes after every change, so an empty subscription list persists |
+| 13 | `aiohttp` with timeouts and a 5 MB cap; parsing runs in a thread |
+| 14, 15, 24 | Slash commands with autocomplete and typed arguments (no `message_content` intent); long replies are split into 2000-character chunks |
+| 18 | Rotating log file (5 MB × 4), the bot's own loggers, no bare `except:` |
+| 19 | Entries are tracked by link; every new strip since the last one is posted (max 5, oldest first) |
+| 21 | Restart exits with code 75 and the start script / systemd starts it again |
+| 22, 23, 25 | Split into `config.py`, `storage.py`, `feeds.py`, `bot.py`, `commands.py`; f-strings; help is generated |
+| 26, 27 | `requirements.txt` replaces the old install scripts; a fresh install starts with an empty catalogue (add comics with `/comics-admin add`) |
+| 28 | `pytest` suite (22 tests: feed parsing, SSRF checks, migration, `.env` repair, end-to-end delivery against a local feed server), `ruff`, GitHub Actions CI on Python 3.10 and 3.13 |
+
+### Dependency update ("renovate run"), 2026-10-01
+
+| Package | Before | Now | Notes |
+|---|---|---|---|
+| discord.py | unpinned (2.x) | 2.7.1 | Latest. Needs Python ≥ 3.8; the feed stack below needs ≥ 3.10 |
+| feedparser | unpinned | 6.0.14 | Latest. Handles both RSS and Atom, so the fallback library is not needed |
+| python-dotenv | unpinned | 1.2.4 | Latest. Requires Python ≥ 3.10 |
+| aiohttp | (via discord.py) | 3.14.3 | Now used directly for feed downloads. Requires Python ≥ 3.10 |
+| atoma | unpinned | **removed** | Unmaintained since 2021; feedparser covers Atom |
+| requests | unpinned (missing from install scripts) | **removed** | Blocking HTTP client, replaced by aiohttp |
+| pytest / ruff (dev) | n/a | 9.1.1 / 0.16.9 | New |
+| actions/checkout / setup-python | n/a | v5 / v6 | New CI workflow |
+| Python | any 3.x | **≥ 3.10** | Required by the current feedparser, python-dotenv and aiohttp releases |
+
+All versions are now pinned. `renovate.json` keeps them current with weekly PRs (dev tools and GitHub Actions grouped), each checked by CI.
