@@ -94,7 +94,7 @@ On first run, both scripts create a `.venv`. They reinstall `requirements.txt` o
 | atoma | unpinned | **removed** | Unmaintained since 2021; feedparser covers Atom |
 | requests | unpinned (missing from install scripts) | **removed** | Blocking HTTP client, replaced by aiohttp |
 | pytest / ruff (dev) | n/a | 9.1.1 / 0.16.9 | New |
-| actions/checkout / setup-python | n/a | v5 / v6 | New CI workflow |
+| actions/checkout / setup-python | n/a | v7 / v7 | New CI workflow (bumped from v5 / v6 per Renovate dashboard) |
 | Python | any 3.x | **≥ 3.10** | Required by the current feedparser, python-dotenv and aiohttp releases |
 
 All versions are now pinned. `renovate.json` keeps them current with weekly PRs (dev tools and GitHub Actions grouped), each checked by CI.
