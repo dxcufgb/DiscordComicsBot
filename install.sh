@@ -11,6 +11,7 @@
 #   --dir DIR       Install location (default /opt/comicsbot)
 #   --token TOKEN   Discord bot token (or set DISCORD_TOKEN); asked for when missing
 #   --yes           Do not ask before installing system packages
+#   PYTHON=/path    Use this Python 3.10+ instead of searching PATH (environment variable)
 set -euo pipefail
 
 SCRIPT="$(readlink -f "${BASH_SOURCE[0]}")"
@@ -39,7 +40,7 @@ confirm() {
 
 if [ "$(id -u)" -ne 0 ]; then
     command -v sudo > /dev/null || die "run this script as root"
-    exec sudo --preserve-env=DISCORD_TOKEN bash "$SCRIPT" "$@"
+    exec sudo --preserve-env=DISCORD_TOKEN,PYTHON bash "$SCRIPT" "$@"
 fi
 
 while [ $# -gt 0 ]; do
@@ -50,7 +51,7 @@ while [ $# -gt 0 ]; do
         --yes|-y) ASSUME_YES=1; shift ;;
         --uninstall) ACTION="uninstall"; shift ;;
         --purge) PURGE=1; shift ;;
-        -h|--help) sed -n '2,17p' "$SCRIPT" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help) awk 'NR > 1 && !/^#/ { exit } NR > 1 { sub(/^# ?/, ""); print }' "$SCRIPT"; exit 0 ;;
         *) die "unknown option: $1 (see --help)" ;;
     esac
 done
@@ -77,9 +78,31 @@ find_python() {
     return 1
 }
 
+# Explain why the package manager's Python is not enough (Debian 11 "bullseye" and
+# Ubuntu 20.04 only ship Python 3.9 or older).
+too_old_message() {
+    local found="" release=""
+    if command -v python3 > /dev/null; then
+        found=" (python3 is $(python3 --version 2>&1))"
+    fi
+    if [ -r /etc/os-release ]; then
+        # shellcheck source=/dev/null
+        release=" $(. /etc/os-release && echo "${PRETTY_NAME:-$ID}")"
+    fi
+    echo "the Python your distribution${release} provides is older than 3.10${found}."
+    echo "       Upgrade to a newer release of your distribution (Debian 12 or Ubuntu 22.04 and later ship Python 3.11+),"
+    echo "       or install Python 3.10+ another way and run this script again with PYTHON=/path/to/python3.x"
+}
+
 install_packages() {
     if command -v apt-get > /dev/null; then
-        apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "$@"
+        # apt-get update fails as a whole when any single source is broken (a stale
+        # third-party PPA, for example), even though the distribution's own package
+        # lists refreshed fine. Warn and let apt-get install try with what it has.
+        if ! apt-get update -qq; then
+            echo "Warning: some package sources could not be refreshed (see above); trying to install anyway." >&2
+        fi
+        DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "$@"
     elif command -v dnf > /dev/null; then
         dnf install -y -q "$@"
     elif command -v pacman > /dev/null; then
@@ -92,13 +115,15 @@ install_packages() {
 }
 
 ensure_python() {
-    if ! PYTHON="$(find_python)"; then
+    if [ -n "${PYTHON:-}" ]; then
+        python_ok "$PYTHON" || die "PYTHON=$PYTHON is not a Python 3.10+ interpreter"
+    elif ! PYTHON="$(find_python)"; then
         local pkg="python3"
         command -v pacman > /dev/null && pkg="python"
         confirm "Python 3.10 or newer is required. Install it with the package manager now?" \
             || die "install Python 3.10+ and run this script again"
         install_packages "$pkg" || die "could not install Python automatically; install Python 3.10+ manually"
-        PYTHON="$(find_python)" || die "the installed Python is older than 3.10; install Python 3.10+ manually"
+        PYTHON="$(find_python)" || die "$(too_old_message)"
     fi
     # Debian/Ubuntu ship venv separately.
     if ! "$PYTHON" -c 'import venv, ensurepip' 2> /dev/null; then
