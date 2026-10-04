@@ -98,7 +98,7 @@ ruff check . && ruff format --check . && pytest
 2. Tag the merge commit and push the tag:
 
    ```sh
-   git tag v2.1.0 && git push origin v2.1.0
+   git tag v2.1.1 && git push origin v2.1.1
    ```
 
 The Release workflow runs the tests, builds the archives with `scripts/build_release.py` and publishes a GitHub
