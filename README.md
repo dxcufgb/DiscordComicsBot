@@ -26,6 +26,8 @@ sudo ./install.sh
 ```
 
 The bot is installed in `/opt/comicsbot` and runs as the system user `comicsbot`.
+Distributions older than Debian 12 / Ubuntu 22.04 ship a Python older than 3.10; upgrade the system, or install a
+newer Python yourself and run `sudo PYTHON=/path/to/python3.x ./install.sh`.
 Manage it with `systemctl status|restart|stop comicsbot`; logs are in `journalctl -u comicsbot` and
 `/opt/comicsbot/discord.log`.
 
