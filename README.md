@@ -94,17 +94,20 @@ ruff check . && ruff format --check . && pytest
 
 ### Making a release
 
-1. Bump the version in `comicsbot/__init__.py` and `pyproject.toml` (a test checks that they match) and merge to `main`.
-2. Tag the merge commit and push the tag:
+The version lives in `comicsbot/__init__.py` (`__version__`); `pyproject.toml` must match it (a test checks).
 
-   ```sh
-   git tag v2.1.1 && git push origin v2.1.1
-   ```
+1. Bump `__version__` in `comicsbot/__init__.py` and `version` in `pyproject.toml`, and merge to `main`.
+2. Publish, any of these ways:
+   - **Actions → Release → Run workflow** on `main`. This creates the tag `v<version>` and the release. It
+     refuses to run if that tag already exists, so a forgotten version bump can't overwrite a release.
+   - Push a tag yourself: `git tag v2.2.0 && git push origin v2.2.0`.
+   - Publish a release with a new `v<version>` tag on GitHub's Releases page.
 
-The Release workflow runs the tests, builds the archives with `scripts/build_release.py` and publishes a GitHub
-release with them, a `SHA256SUMS` file and install instructions. Creating the release in the GitHub UI with a new
-`vX.Y.Z` tag works too; the workflow then attaches the archives to it. Build the archives locally with
-`python scripts/build_release.py` (output in `dist/`).
+The Release workflow runs the tests, builds the archives with `scripts/build_release.py` and publishes the release
+with the archives, a `SHA256SUMS` file and install instructions above the generated changelog (it adds them to a
+release created on GitHub's website too). Versions with a hyphen (`2.2.0-rc1`) become pre-releases. To inspect the
+archives locally, run `python scripts/build_release.py`; they're written to `dist/`, and the same commit always
+builds byte-identical archives.
 
 ### Dependencies
 
