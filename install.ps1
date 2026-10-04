@@ -177,6 +177,23 @@ function Set-EnvToken([string]$EnvFile, [string]$Value) {
     Write-TextFile $EnvFile (($lines -join "`r`n") + "`r`n")
 }
 
+# Only the current user may read the token: drop inherited permissions, grant just this user,
+# and check the result instead of trusting that it worked.
+function Protect-SecretFile([string]$Path) {
+    $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User
+    $acl = Get-Acl -LiteralPath $Path
+    $acl.SetAccessRuleProtection($true, $false)
+    foreach ($rule in @($acl.Access)) { [void]$acl.RemoveAccessRuleSpecific($rule) }
+    $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($sid, 'FullControl', 'Allow')))
+    Set-Acl -LiteralPath $Path -AclObject $acl
+    $others = @((Get-Acl -LiteralPath $Path).Access | Where-Object {
+        $_.IdentityReference.Translate([Security.Principal.SecurityIdentifier]) -ne $sid
+    })
+    if ($others) {
+        Stop-WithError "Could not restrict $Path to the current user; still readable by: $($others.IdentityReference -join ', ')"
+    }
+}
+
 function Read-Token {
     Write-Host 'Paste the bot token from https://discord.com/developers/applications (Bot -> Reset Token).'
     $secure = Read-Host 'Discord bot token' -AsSecureString
@@ -278,9 +295,7 @@ function Install-Bot {
     } elseif ($Token) {
         Set-EnvToken $envFile $Token
     }
-    # Only the current user may read the token.
-    $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-    Invoke-Native 'icacls.exe' @($envFile, '/inheritance:r', '/grant:r', "*${sid}:(F)") | Out-Null
+    Protect-SecretFile $envFile
 
     $venvPython = Join-Path $InstallDir '.venv\Scripts\python.exe'
     if (-not (Test-Path $venvPython)) {
