@@ -3,8 +3,12 @@ REM Start script for ComicsBot on Windows.
 REM
 REM   start-bot.bat            Set up the virtualenv (first run) and start the bot.
 REM                            The bot is restarted automatically if it crashes.
-REM   start-bot.bat install    Start the bot automatically when you log in to Windows
+REM   start-bot.bat setup      Only create/update the virtualenv
+REM   start-bot.bat install    Start the bot from this folder automatically when you log in
+REM                            (add -AtStartup, as administrator, to start it at boot instead)
 REM   start-bot.bat uninstall  Remove the automatic start
+REM
+REM For a clean install from a release archive, use install.bat instead.
 setlocal EnableExtensions
 
 set "BOT_DIR=%~dp0"
@@ -20,8 +24,12 @@ cd /d "%BOT_DIR%"
 
 if /i "%~1"=="install" goto install
 if /i "%~1"=="uninstall" goto uninstall
+if /i "%~1"=="setup" (
+    call :setup_venv
+    exit /b
+)
 if not "%~1"=="" (
-    echo Usage: %~nx0 [install^|uninstall]
+    echo Usage: %~nx0 [setup^|install^|uninstall]
     exit /b 2
 )
 
@@ -82,14 +90,9 @@ if errorlevel 1 (
 exit /b 0
 
 :install
-call :setup_venv || exit /b 1
-REM Runs at logon of the current user, minimised, without needing admin rights.
-schtasks /Create /F /TN "%TASK_NAME%" /SC ONLOGON /RL LIMITED ^
-    /TR "cmd /c start \"ComicsBot\" /min \"%~f0\""
-if errorlevel 1 exit /b 1
-echo Registered scheduled task "%TASK_NAME%". The bot will start when you log in.
-echo Start it now with:  schtasks /Run /TN "%TASK_NAME%"
-exit /b 0
+REM install.ps1 registers the task without Windows' default 3-day run-time limit.
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%BOT_DIR%\install.ps1" -InstallDir "%BOT_DIR%" %2
+exit /b %errorlevel%
 
 :uninstall
 schtasks /Delete /F /TN "%TASK_NAME%"
