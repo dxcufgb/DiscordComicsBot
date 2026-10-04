@@ -86,6 +86,7 @@ too_old_message() {
         found=" (python3 is $(python3 --version 2>&1))"
     fi
     if [ -r /etc/os-release ]; then
+        # shellcheck source=/dev/null
         release=" $(. /etc/os-release && echo "${PRETTY_NAME:-$ID}")"
     fi
     echo "the Python your distribution${release} provides is older than 3.10${found}."
