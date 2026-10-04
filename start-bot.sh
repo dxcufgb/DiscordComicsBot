@@ -3,8 +3,12 @@
 #
 #   ./start-bot.sh                   Set up the virtualenv (first run) and start the bot.
 #                                    The bot is restarted automatically if it crashes.
-#   ./start-bot.sh install-service   Register a systemd service so the bot starts on boot
+#   ./start-bot.sh setup             Only create/update the virtualenv
+#   ./start-bot.sh install-service   Register a systemd service for this folder so the bot starts on boot
+#                                    (SERVICE_USER=name runs it as another user; default: you)
 #   ./start-bot.sh remove-service    Remove that systemd service
+#
+# For a clean install from a release archive, use install.sh instead.
 #
 # Alternative without systemd: add this line to `crontab -e`
 #   @reboot /path/to/DiscordComicsBot/start-bot.sh >> /path/to/DiscordComicsBot/startup.log 2>&1
@@ -74,7 +78,7 @@ run_bot() {
 
 install_service() {
     setup_venv
-    local run_user="${SUDO_USER:-$(id -un)}"
+    local run_user="${SERVICE_USER:-${SUDO_USER:-$(id -un)}}"
     local sudo=""
     [ "$(id -u)" -eq 0 ] || sudo="sudo"
     echo "Writing $SERVICE_FILE (runs as user '$run_user') ..."
@@ -92,6 +96,9 @@ ExecStart=$BOT_DIR/start-bot.sh
 Restart=on-failure
 RestartSec=10
 RestartPreventExitStatus=$EXIT_CONFIG_ERROR
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
 
 [Install]
 WantedBy=multi-user.target
@@ -113,10 +120,11 @@ remove_service() {
 
 case "${1:-run}" in
     run) run_bot ;;
+    setup) setup_venv ;;
     install-service) install_service ;;
     remove-service) remove_service ;;
     *)
-        echo "Usage: $0 [run|install-service|remove-service]" >&2
+        echo "Usage: $0 [run|setup|install-service|remove-service]" >&2
         exit 2
         ;;
 esac

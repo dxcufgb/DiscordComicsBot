@@ -1,0 +1,265 @@
+#!/usr/bin/env bash
+# ComicsBot installer for Linux (systemd). Run it from an extracted release archive:
+#
+#   sudo ./install.sh                        Install or upgrade, then start the service
+#   sudo ./install.sh --migrate-from DIR     Also copy .env and bot data from an older install
+#                                            (for example the git checkout you ran it from before)
+#   sudo ./install.sh --uninstall            Remove the service and program files, keep .env and data
+#   sudo ./install.sh --uninstall --purge    Remove everything, including data and the service user
+#
+# Options:
+#   --dir DIR       Install location (default /opt/comicsbot)
+#   --token TOKEN   Discord bot token (or set DISCORD_TOKEN); asked for when missing
+#   --yes           Do not ask before installing system packages
+set -euo pipefail
+
+SCRIPT="$(readlink -f "${BASH_SOURCE[0]}")"
+SRC_DIR="$(dirname "$SCRIPT")"
+INSTALL_DIR="/opt/comicsbot"
+SERVICE_USER="comicsbot"
+SERVICE_NAME="comicsbot"
+TOKEN="${DISCORD_TOKEN:-}"
+MIGRATE_FROM=""
+ASSUME_YES=0
+ACTION="install"
+PURGE=0
+
+APP_FILES=(ComicsBot.py comicsbot requirements.txt start-bot.sh install.sh .env.example README.md VERSION)
+DATA_FILES=(.env state.json comics.json)
+
+die() { echo "Error: $*" >&2; exit 1; }
+info() { echo "==> $*"; }
+confirm() {
+    [ "$ASSUME_YES" -eq 1 ] && return 0
+    [ -t 0 ] || return 1
+    local answer
+    read -r -p "$1 [Y/n] " answer
+    [[ -z "$answer" || "$answer" =~ ^[Yy] ]]
+}
+
+if [ "$(id -u)" -ne 0 ]; then
+    command -v sudo > /dev/null || die "run this script as root"
+    exec sudo --preserve-env=DISCORD_TOKEN bash "$SCRIPT" "$@"
+fi
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --dir) INSTALL_DIR="${2:?--dir needs a path}"; shift 2 ;;
+        --token) TOKEN="${2:?--token needs a value}"; shift 2 ;;
+        --migrate-from) MIGRATE_FROM="${2:?--migrate-from needs a path}"; shift 2 ;;
+        --yes|-y) ASSUME_YES=1; shift ;;
+        --uninstall) ACTION="uninstall"; shift ;;
+        --purge) PURGE=1; shift ;;
+        -h|--help) sed -n '2,17p' "$SCRIPT" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        *) die "unknown option: $1 (see --help)" ;;
+    esac
+done
+INSTALL_DIR="$(readlink -m "$INSTALL_DIR")"
+
+command -v systemctl > /dev/null && [ -d /run/systemd/system ] \
+    || die "systemd is not running here. Use ./start-bot.sh with a crontab '@reboot' line instead."
+
+# -- helpers ---------------------------------------------------------------
+
+python_ok() {
+    "$1" -c 'import sys; sys.exit(sys.version_info < (3, 10))' 2> /dev/null
+}
+
+find_python() {
+    local candidate
+    for candidate in python3.13 python3.12 python3.11 python3.10 python3; do
+        if command -v "$candidate" > /dev/null && python_ok "$candidate"; then
+            command -v "$candidate"
+            return 0
+        fi
+    done
+    return 1
+}
+
+install_packages() {
+    if command -v apt-get > /dev/null; then
+        apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "$@"
+    elif command -v dnf > /dev/null; then
+        dnf install -y -q "$@"
+    elif command -v pacman > /dev/null; then
+        pacman -S --noconfirm --needed "$@"
+    elif command -v zypper > /dev/null; then
+        zypper --non-interactive install "$@"
+    else
+        return 1
+    fi
+}
+
+ensure_python() {
+    if ! PYTHON="$(find_python)"; then
+        local pkg="python3"
+        command -v pacman > /dev/null && pkg="python"
+        confirm "Python 3.10 or newer is required. Install it with the package manager now?" \
+            || die "install Python 3.10+ and run this script again"
+        install_packages "$pkg" || die "could not install Python automatically; install Python 3.10+ manually"
+        PYTHON="$(find_python)" || die "the installed Python is older than 3.10; install Python 3.10+ manually"
+    fi
+    # Debian/Ubuntu ship venv separately.
+    if ! "$PYTHON" -c 'import venv, ensurepip' 2> /dev/null; then
+        local version
+        version="$("$PYTHON" -c 'import sys; print(f"{sys.version_info[0]}.{sys.version_info[1]}")')"
+        confirm "The Python venv module is missing. Install it now?" \
+            || die "install the venv module for $PYTHON (e.g. apt install python$version-venv)"
+        install_packages "python$version-venv" || install_packages python3-venv \
+            || die "could not install the venv module; install python$version-venv manually"
+    fi
+    info "Using $PYTHON ($("$PYTHON" --version 2>&1))"
+}
+
+run_as_service_user() {
+    if command -v runuser > /dev/null; then
+        runuser -u "$SERVICE_USER" -- env HOME="$INSTALL_DIR" "$@"
+    else
+        sudo -u "$SERVICE_USER" -- env HOME="$INSTALL_DIR" "$@"
+    fi
+}
+
+stop_service() {
+    if systemctl is-active --quiet "$SERVICE_NAME" 2> /dev/null; then
+        info "Stopping the running bot"
+        systemctl stop "$SERVICE_NAME"
+    fi
+}
+
+set_token() {
+    local env_file="$INSTALL_DIR/.env" tmp
+    tmp="$(mktemp)"
+    awk -v t="$TOKEN" '/^DISCORD_TOKEN=/ { print "DISCORD_TOKEN=" t; next } { print }' "$env_file" > "$tmp"
+    cat "$tmp" > "$env_file"
+    rm -f "$tmp"
+}
+
+# -- install ---------------------------------------------------------------
+
+do_install() {
+    [ -f "$SRC_DIR/ComicsBot.py" ] || die "run install.sh from the extracted release folder"
+    if [ -z "$TOKEN" ] && [ ! -f "$INSTALL_DIR/.env" ] && [ ! -f "$MIGRATE_FROM/.env" ] && [ ! -t 0 ]; then
+        die "a bot token is required: pass --token or set DISCORD_TOKEN"
+    fi
+    ensure_python
+    stop_service
+
+    if ! id "$SERVICE_USER" > /dev/null 2>&1; then
+        info "Creating system user '$SERVICE_USER'"
+        useradd --system --home-dir "$INSTALL_DIR" --no-create-home \
+            --shell "$(command -v nologin || echo /bin/false)" "$SERVICE_USER"
+    fi
+
+    mkdir -p "$INSTALL_DIR"
+    if [ "$SRC_DIR" != "$INSTALL_DIR" ]; then
+        info "Copying program files to $INSTALL_DIR"
+        rm -rf "$INSTALL_DIR/comicsbot"
+        local item
+        for item in "${APP_FILES[@]}"; do
+            if [ -e "$SRC_DIR/$item" ]; then
+                cp -a "$SRC_DIR/$item" "$INSTALL_DIR/"
+            fi
+        done
+    fi
+
+    if [ -n "$MIGRATE_FROM" ]; then
+        [ -d "$MIGRATE_FROM" ] || die "--migrate-from: $MIGRATE_FROM is not a folder"
+        info "Copying settings and data from $MIGRATE_FROM"
+        local path name
+        for path in "${DATA_FILES[@]/#/$MIGRATE_FROM/}" "$MIGRATE_FROM"/*-Comics.json; do
+            [ -f "$path" ] || continue
+            name="$(basename "$path")"
+            if [ -e "$INSTALL_DIR/$name" ]; then
+                echo "    $name already exists in $INSTALL_DIR, kept the existing one"
+            else
+                cp -a "$path" "$INSTALL_DIR/$name"
+                echo "    $name"
+            fi
+        done
+    fi
+
+    if [ ! -f "$INSTALL_DIR/.env" ]; then
+        cp "$INSTALL_DIR/.env.example" "$INSTALL_DIR/.env"
+        if [ -z "$TOKEN" ] && [ -t 0 ]; then
+            echo "Paste the bot token from https://discord.com/developers/applications (Bot -> Reset Token)."
+            read -r -s -p "Discord bot token: " TOKEN
+            echo
+        fi
+        [ -n "$TOKEN" ] || die "a bot token is required: pass --token or set DISCORD_TOKEN"
+        set_token
+    elif [ -n "$TOKEN" ]; then
+        set_token
+    fi
+
+    chown -R "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR"
+    chmod 600 "$INSTALL_DIR/.env"
+    chmod 755 "$INSTALL_DIR/start-bot.sh" "$INSTALL_DIR/install.sh"
+
+    run_as_service_user test -x "$INSTALL_DIR/start-bot.sh" \
+        || die "user '$SERVICE_USER' cannot access $INSTALL_DIR (is a parent folder private?); use a location like /opt/comicsbot"
+
+    info "Installing Python dependencies"
+    run_as_service_user env PYTHON="$PYTHON" "$INSTALL_DIR/start-bot.sh" setup
+
+    info "Registering and starting the systemd service"
+    local log="$INSTALL_DIR/discord.log" before=0
+    [ -f "$log" ] && before="$(wc -l < "$log")"
+    SERVICE_USER="$SERVICE_USER" "$INSTALL_DIR/start-bot.sh" install-service > /dev/null
+
+    info "Waiting for the bot to log in"
+    local _
+    for _ in $(seq 1 30); do
+        sleep 1
+        if [ -f "$log" ] && tail -n +"$((before + 1))" "$log" | grep -q "Logged in as"; then
+            tail -n +"$((before + 1))" "$log" | grep "Logged in as" | tail -n 1
+            echo
+            echo "ComicsBot $(cat "$INSTALL_DIR/VERSION" 2> /dev/null || true) is installed in $INSTALL_DIR and starts on boot."
+            echo "  Status:  systemctl status $SERVICE_NAME"
+            echo "  Logs:    journalctl -u $SERVICE_NAME -f   (or $log)"
+            echo "  Restart: systemctl restart $SERVICE_NAME"
+            echo "  Settings: $INSTALL_DIR/.env"
+            return 0
+        fi
+        if ! systemctl is-active --quiet "$SERVICE_NAME"; then
+            break
+        fi
+    done
+    echo "The bot did not report a successful login. Recent errors from $log:" >&2
+    if [ -f "$log" ]; then
+        tail -n +"$((before + 1))" "$log" | grep -E "ERROR|CRITICAL" | tail -n 5 >&2 || true
+    fi
+    echo "Full output: journalctl -u $SERVICE_NAME -n 50" >&2
+    exit 1
+}
+
+# -- uninstall ---------------------------------------------------------------
+
+do_uninstall() {
+    if [ -f "/etc/systemd/system/$SERVICE_NAME.service" ]; then
+        info "Removing the systemd service"
+        systemctl disable --now "$SERVICE_NAME" 2> /dev/null || true
+        rm -f "/etc/systemd/system/$SERVICE_NAME.service"
+        systemctl daemon-reload
+    fi
+    [ -d "$INSTALL_DIR" ] || { info "Nothing installed in $INSTALL_DIR"; return 0; }
+    if [ "$PURGE" -eq 1 ]; then
+        info "Deleting $INSTALL_DIR"
+        rm -rf "$INSTALL_DIR"
+        if id "$SERVICE_USER" > /dev/null 2>&1; then
+            userdel "$SERVICE_USER" || true
+        fi
+    else
+        info "Removing program files (keeping .env and data in $INSTALL_DIR)"
+        local item
+        for item in "${APP_FILES[@]}" .venv .cache; do
+            [ "$item" = ".env.example" ] && continue
+            rm -rf "${INSTALL_DIR:?}/$item"
+        done
+    fi
+    info "ComicsBot has been uninstalled"
+}
+
+case "$ACTION" in
+    install) do_install ;;
+    uninstall) do_uninstall ;;
+esac

@@ -13,3 +13,5 @@ comics.json
 __pycache__/
 .pytest_cache/
 .ruff_cache/
+bot.lock
+dist/

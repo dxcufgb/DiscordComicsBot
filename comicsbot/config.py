@@ -70,7 +70,7 @@ def repair_env_file(env_file: Path) -> None:
     if "TOKEN" not in recovered:
         return
     backup = env_file.with_name(env_file.name + ".broken-backup")
-    shutil.copyfile(env_file, backup)
+    shutil.copy2(env_file, backup)  # keeps the restrictive permissions of the original
     lines = [f"DISCORD_TOKEN={recovered.pop('TOKEN')}"]
     lines += [f"{key}={value}" for key, value in recovered.items() if key != "CHRISTMAS_WISH"]
     env_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
