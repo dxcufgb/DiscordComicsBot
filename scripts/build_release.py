@@ -46,8 +46,10 @@ cd ComicsBot-{version}
 sudo ./install.sh
 ```
 
-**Windows**: download `ComicsBot-{version}-windows.zip`, extract it and double-click `install.bat`
-(run it as administrator with `install.bat -AtStartup` to start the bot at boot instead of at logon).
+**Windows**: download and run `ComicsBot-{version}-setup.exe`. Or extract `ComicsBot-{version}-windows.zip`
+and double-click `install.bat` (run it as administrator with `install.bat -AtStartup` to start the bot at boot
+instead of at logon). The setup is not code-signed, so Windows SmartScreen may ask you to confirm
+("More info" → "Run anyway").
 
 The installer sets up Python if needed, asks for the bot token, installs the dependencies and
 starts the bot as a service. Running a newer release's installer upgrades in place and keeps

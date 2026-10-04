@@ -56,8 +56,9 @@ while [ $# -gt 0 ]; do
 done
 INSTALL_DIR="$(readlink -m "$INSTALL_DIR")"
 
-command -v systemctl > /dev/null && [ -d /run/systemd/system ] \
-    || die "systemd is not running here. Use ./start-bot.sh with a crontab '@reboot' line instead."
+if ! command -v systemctl > /dev/null || [ ! -d /run/systemd/system ]; then
+    die "systemd is not running here. Use ./start-bot.sh with a crontab '@reboot' line instead."
+fi
 
 # -- helpers ---------------------------------------------------------------
 

@@ -38,6 +38,15 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+# Started from PowerShell 7, or from a program it launched (such as the setup.exe), Windows PowerShell
+# inherits PSModulePath entries for PowerShell 7, whose modules (Get-Acl, ...) fail to load in 5.1.
+if ($PSVersionTable.PSEdition -ne 'Core') {
+    $env:PSModulePath = @(
+        (Join-Path ([Environment]::GetFolderPath('MyDocuments')) 'WindowsPowerShell\Modules'),
+        [Environment]::ExpandEnvironmentVariables([Environment]::GetEnvironmentVariable('PSModulePath', 'Machine')),
+        (Join-Path $PSHOME 'Modules')
+    ) -join ';'
+}
 $TaskName = 'ComicsBot'
 $SourceDir = $PSScriptRoot
 # Run from an installed folder (install.bat -Restart etc.), act on that folder by default.
@@ -48,11 +57,24 @@ $InstallDir = [IO.Path]::GetFullPath($InstallDir).TrimEnd('\')
 $AppFiles = @('ComicsBot.py', 'comicsbot', 'requirements.txt', 'start-bot.bat', 'install.ps1', 'install.bat',
               '.env.example', 'README.md', 'VERSION')
 $DataFiles = @('.env', 'state.json', 'comics.json')
+# Everything shown is also appended here, so a run started from the setup.exe (whose console window
+# closes) can still be diagnosed.
+$LogFile = Join-Path $InstallDir 'install.log'
 
-function Write-Step([string]$Message) { Write-Host "==> $Message" -ForegroundColor Cyan }
+function Add-InstallLog([string]$Message) {
+    if (Test-Path -LiteralPath $InstallDir -PathType Container) {
+        Add-Content -LiteralPath $LogFile -Value "$(Get-Date -Format 's') $Message" -ErrorAction SilentlyContinue
+    }
+}
+
+function Write-Step([string]$Message) {
+    Write-Host "==> $Message" -ForegroundColor Cyan
+    Add-InstallLog "==> $Message"
+}
 
 function Stop-WithError([string]$Message) {
     Write-Host "Error: $Message" -ForegroundColor Red
+    Add-InstallLog "Error: $Message"
     exit 1
 }
 
@@ -73,7 +95,7 @@ function Invoke-Native([string]$Exe, [string[]]$Arguments, [switch]$ShowOutput) 
     $ErrorActionPreference = 'Continue'
     try {
         if ($ShowOutput) {
-            & $Exe @Arguments 2>&1 | ForEach-Object { Write-Host "    $_" }
+            & $Exe @Arguments 2>&1 | ForEach-Object { Write-Host "    $_"; Add-InstallLog "    $_" }
         } else {
             & $Exe @Arguments 2>&1 | Out-Null
         }
@@ -133,7 +155,7 @@ function Stop-ProcessTree([int]$ProcessId) {
     Stop-Process -Id $ProcessId -Force -ErrorAction SilentlyContinue
 }
 
-function Get-OwnProcessIds {
+function Get-ProcessAncestry {
     $ids = @()
     $current = $PID
     while ($current -and $ids -notcontains $current) {
@@ -152,7 +174,7 @@ function Stop-Bot {
     $loop = Join-Path $InstallDir 'start-bot.bat'
     $venv = Join-Path $InstallDir '.venv'
     # Never stop this installer itself or the console it runs in (e.g. "start-bot.bat install").
-    $own = Get-OwnProcessIds
+    $own = Get-ProcessAncestry
     $processes = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
         ($own -notcontains [int]$_.ProcessId) -and (
             ($_.Name -eq 'cmd.exe' -and $_.CommandLine -and
@@ -175,6 +197,23 @@ function Set-EnvToken([string]$EnvFile, [string]$Value) {
         if ($_ -match '^DISCORD_TOKEN=') { "DISCORD_TOKEN=$Value" } else { $_ }
     }
     Write-TextFile $EnvFile (($lines -join "`r`n") + "`r`n")
+}
+
+# Only the current user may read the token: drop inherited permissions, grant just this user,
+# and check the result instead of trusting that it worked.
+function Protect-SecretFile([string]$Path) {
+    $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User
+    $acl = Get-Acl -LiteralPath $Path
+    $acl.SetAccessRuleProtection($true, $false)
+    foreach ($rule in @($acl.Access)) { [void]$acl.RemoveAccessRuleSpecific($rule) }
+    $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($sid, 'FullControl', 'Allow')))
+    Set-Acl -LiteralPath $Path -AclObject $acl
+    $others = @((Get-Acl -LiteralPath $Path).Access | Where-Object {
+        $_.IdentityReference.Translate([Security.Principal.SecurityIdentifier]) -ne $sid
+    })
+    if ($others) {
+        Stop-WithError "Could not restrict $Path to the current user; still readable by: $($others.IdentityReference -join ', ')"
+    }
 }
 
 function Read-Token {
@@ -270,6 +309,7 @@ function Install-Bot {
     }
 
     $envFile = Join-Path $InstallDir '.env'
+    Write-Step "Writing the settings to $envFile"
     if (-not (Test-Path $envFile)) {
         Copy-Item (Join-Path $InstallDir '.env.example') $envFile
         if (-not $Token) { $Token = Read-Token }
@@ -278,9 +318,7 @@ function Install-Bot {
     } elseif ($Token) {
         Set-EnvToken $envFile $Token
     }
-    # Only the current user may read the token.
-    $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-    Invoke-Native 'icacls.exe' @($envFile, '/inheritance:r', '/grant:r', "*${sid}:(F)") | Out-Null
+    Protect-SecretFile $envFile
 
     $venvPython = Join-Path $InstallDir '.venv\Scripts\python.exe'
     if (-not (Test-Path $venvPython)) {
@@ -338,16 +376,21 @@ function Uninstall-Bot {
     Write-Step 'ComicsBot has been uninstalled'
 }
 
-if ($Uninstall) {
-    Uninstall-Bot
-} elseif ($Stop) {
-    Stop-Bot
-    Write-Step 'ComicsBot stopped (it starts again at the next logon/startup, or with install.bat -Restart)'
-} elseif ($Restart) {
-    if (-not (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue)) { Stop-WithError 'ComicsBot is not installed.' }
-    Stop-Bot
-    Start-ScheduledTask -TaskName $TaskName
-    Write-Step 'ComicsBot restarted'
-} else {
-    Install-Bot
+try {
+    if ($Uninstall) {
+        Uninstall-Bot
+    } elseif ($Stop) {
+        Stop-Bot
+        Write-Step 'ComicsBot stopped (it starts again at the next logon/startup, or with install.bat -Restart)'
+    } elseif ($Restart) {
+        if (-not (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue)) { Stop-WithError 'ComicsBot is not installed.' }
+        Stop-Bot
+        Start-ScheduledTask -TaskName $TaskName
+        Write-Step 'ComicsBot restarted'
+    } else {
+        Install-Bot
+    }
+} catch {
+    # Unexpected errors would otherwise only reach a console window that may already be gone.
+    Stop-WithError "$($_.Exception.Message)`n$($_.InvocationInfo.PositionMessage)"
 }
