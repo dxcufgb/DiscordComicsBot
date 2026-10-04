@@ -114,3 +114,51 @@ jobs:
           if (Get-ScheduledTask -TaskName ComicsBot -ErrorAction SilentlyContinue) { throw 'task not removed' }
           if (Test-Path $dir) { throw 'install folder not removed' }
           exit 0
+
+  # Builds ComicsBot-<version>-setup.exe with Inno Setup and runs it unattended: install with the bot
+  # starting at boot, check the result like the zip installer above, then uninstall with /PURGE.
+  setup-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+      - name: Build release archives and setup.exe
+        shell: pwsh
+        run: |
+          python scripts/build_release.py --out dist
+          ./scripts/build_setup.ps1 -OutDir dist
+      - name: Silent install
+        shell: pwsh
+        run: |
+          $setup = (Get-Item dist/ComicsBot-*-setup.exe).FullName
+          $env:DISCORD_TOKEN = 'ci-fake-token'
+          $setupArgs = '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/TASKS=startatboot', "/LOG=$env:RUNNER_TEMP\setup.log"
+          $p = Start-Process $setup -ArgumentList $setupArgs -Wait -PassThru
+          Get-Content "$env:RUNNER_TEMP\setup.log" -Tail 25
+          if ($p.ExitCode -ne 0) { throw "setup exited with $($p.ExitCode)" }
+          $dir = "$env:LOCALAPPDATA\ComicsBot"
+          $key = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\{E6949408-6B7C-479B-887F-4C546A3B2278}_is1'
+          "registered: $((Get-ItemProperty $key).DisplayName) $((Get-ItemProperty $key).DisplayVersion)"
+          $task = Get-ScheduledTask -TaskName ComicsBot
+          "task: $($task.Principal.UserId), logon type $($task.Principal.LogonType), time limit $($task.Settings.ExecutionTimeLimit)"
+          if ($task.Principal.LogonType -ne 'S4U') { throw 'the startatboot task was not applied' }
+          if ($task.Settings.ExecutionTimeLimit -ne 'PT0S') { throw 'task must not have a run-time limit' }
+          $readers = (Get-Acl "$dir\.env").Access.IdentityReference.Value
+          "'.env' readable by: $($readers -join ', ')"
+          if ($readers -match 'Users|Everyone|Administrators|SYSTEM') { throw '.env must only be readable by its owner' }
+          if (Select-String -Quiet -Path "$env:RUNNER_TEMP\setup.log" -Pattern 'ci-fake-token') { throw 'token leaked into the setup log' }
+          if (-not (Select-String -Quiet -Path "$dir\discord.log" -Pattern 'Discord rejected the token')) { throw 'bot did not run' }
+          if (-not (Test-Path "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\ComicsBot\Restart ComicsBot.lnk")) { throw 'Start menu shortcuts missing' }
+          exit 0
+      - name: Silent uninstall with /PURGE
+        shell: pwsh
+        run: |
+          $dir = "$env:LOCALAPPDATA\ComicsBot"
+          Start-Process "$dir\unins000.exe" -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/PURGE' -Wait
+          # The uninstaller hands over to a temporary copy of itself, so wait for it to finish.
+          foreach ($i in 1..30) { if (-not (Test-Path $dir)) { break }; Start-Sleep -Seconds 2 }
+          if (Test-Path $dir) { Get-ChildItem $dir -Force; throw 'install folder not removed' }
+          if (Get-ScheduledTask -TaskName ComicsBot -ErrorAction SilentlyContinue) { throw 'task not removed' }
+          exit 0

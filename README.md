@@ -29,11 +29,16 @@ The bot is installed in `/opt/comicsbot` and runs as the system user `comicsbot`
 Manage it with `systemctl status|restart|stop comicsbot`; logs are in `journalctl -u comicsbot` and
 `/opt/comicsbot/discord.log`.
 
-**Windows**: extract `ComicsBot-X.Y.Z-windows.zip` and double-click `install.bat`.
+**Windows**: run `ComicsBot-X.Y.Z-setup.exe`. The wizard asks for the bot token and installs everything. Run it as
+administrator to get the option to start the bot when Windows starts, even if nobody logs in. The Start menu gets
+*Restart ComicsBot*, *ComicsBot log* and *ComicsBot settings (.env)* shortcuts, and the bot can be removed from
+*Settings → Apps*, which asks whether to keep the token and data. The setup is not code-signed, so SmartScreen may
+ask you to confirm (*More info → Run anyway*). Unattended: set `DISCORD_TOKEN` and run
+`ComicsBot-X.Y.Z-setup.exe /VERYSILENT [/TASKS=startatboot]`.
 
-The bot is installed in `%LOCALAPPDATA%\ComicsBot` and starts when you log in. To start it when Windows starts,
-even if nobody logs in, run `install.bat -AtStartup` from an administrator command prompt.
-Manage it with `install.bat -Restart`, `-Stop` or `-Uninstall`.
+Prefer no installer? Extract `ComicsBot-X.Y.Z-windows.zip` and double-click `install.bat` instead; it installs the
+same way (`install.bat -AtStartup` as administrator to start at boot) and is managed with `install.bat -Restart`,
+`-Stop` or `-Uninstall`. Both install into `%LOCALAPPDATA%\ComicsBot` and can upgrade each other.
 
 | | Linux | Windows |
 |---|---|---|
@@ -103,8 +108,9 @@ The version lives in `comicsbot/__init__.py` (`__version__`); `pyproject.toml` m
    - Push a tag yourself: `git tag v2.2.0 && git push origin v2.2.0`.
    - Publish a release with a new `v<version>` tag on GitHub's Releases page.
 
-The Release workflow runs the tests, builds the archives with `scripts/build_release.py` and publishes the release
-with the archives, a `SHA256SUMS` file and install instructions above the generated changelog (it adds them to a
+The Release workflow runs the tests and the real-install CI jobs, builds the archives with `scripts/build_release.py`
+and the Windows `setup.exe` with Inno Setup (`scripts/build_setup.ps1`, `packaging/windows/ComicsBot.iss`), and
+publishes the release with all three, a `SHA256SUMS` file and install instructions above the generated changelog (it adds them to a
 release created on GitHub's website too). Versions with a hyphen (`2.2.0-rc1`) become pre-releases. To inspect the
 archives locally, run `python scripts/build_release.py`; they're written to `dist/`, and the same commit always
 builds byte-identical archives.

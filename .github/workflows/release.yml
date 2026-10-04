@@ -1,5 +1,6 @@
 name: Release
 
+# Publishes the Linux archive, the Windows zip and the Windows setup.exe (Inno Setup).
 # The version always comes from comicsbot/__init__.py (__version__). Three ways to publish:
 #   * Actions tab -> Release -> "Run workflow" on main: creates the tag v<version> and the release.
 #   * Push a tag like v2.2.0 yourself; it must match comicsbot.__version__.
@@ -22,8 +23,28 @@ jobs:
   test:
     uses: ./.github/workflows/ci.yml
 
-  release:
+  # Inno Setup only runs on Windows, so the setup.exe is built here and handed to the release job.
+  setup-exe:
     needs: test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+      - name: Build setup.exe
+        shell: pwsh
+        run: |
+          python scripts/build_release.py --out dist
+          ./scripts/build_setup.ps1 -OutDir dist
+      - uses: actions/upload-artifact@v7
+        with:
+          name: setup-exe
+          path: dist/*-setup.exe
+          if-no-files-found: error
+
+  release:
+    needs: [test, setup-exe]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -53,12 +74,24 @@ jobs:
           echo "Releasing $tag from $GITHUB_SHA"
       - name: Build archives
         run: python scripts/build_release.py --expect-version "${{ steps.tag.outputs.tag }}" --out dist
+      - uses: actions/download-artifact@v8
+        with:
+          name: setup-exe
+          path: dist
+      - name: Checksums for all downloads
+        working-directory: dist
+        run: |
+          test -f "ComicsBot-${TAG#v}-setup.exe"
+          sha256sum ComicsBot-*-linux.tar.gz ComicsBot-*-windows.zip ComicsBot-*-setup.exe > SHA256SUMS
+          cat SHA256SUMS
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.tag.outputs.tag }}
         run: |
-          files=(dist/*.tar.gz dist/*.zip dist/SHA256SUMS)
+          files=(dist/*.tar.gz dist/*.zip dist/*-setup.exe dist/SHA256SUMS)
           if gh release view "$TAG" > /dev/null 2>&1; then
             # The release was created in the GitHub UI; attach the archives to it and put the
             # install instructions above its description (once, so re-runs don't repeat them).
