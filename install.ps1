@@ -133,7 +133,7 @@ function Stop-ProcessTree([int]$ProcessId) {
     Stop-Process -Id $ProcessId -Force -ErrorAction SilentlyContinue
 }
 
-function Get-OwnProcessIds {
+function Get-ProcessAncestry {
     $ids = @()
     $current = $PID
     while ($current -and $ids -notcontains $current) {
@@ -152,7 +152,7 @@ function Stop-Bot {
     $loop = Join-Path $InstallDir 'start-bot.bat'
     $venv = Join-Path $InstallDir '.venv'
     # Never stop this installer itself or the console it runs in (e.g. "start-bot.bat install").
-    $own = Get-OwnProcessIds
+    $own = Get-ProcessAncestry
     $processes = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
         ($own -notcontains [int]$_.ProcessId) -and (
             ($_.Name -eq 'cmd.exe' -and $_.CommandLine -and

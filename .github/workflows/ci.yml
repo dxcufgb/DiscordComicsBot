@@ -6,6 +6,9 @@ on:
   pull_request:
   workflow_call:
 
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -23,3 +26,91 @@ jobs:
       - run: ruff check .
       - run: ruff format --check .
       - run: pytest -q
+
+  # Installs the release archive on a real systemd host. The token is fake on purpose: Discord
+  # rejecting it proves the service started as the bot user, read .env and wrote its log.
+  installer-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Shellcheck
+        run: shellcheck install.sh start-bot.sh
+      - name: Build release archives
+        run: python3 scripts/build_release.py --out dist
+      - name: Install (systemd service)
+        run: |
+          tar xzf dist/ComicsBot-*-linux.tar.gz -C "$RUNNER_TEMP"
+          cd "$RUNNER_TEMP"/ComicsBot-*/
+          sudo DISCORD_TOKEN=ci-fake-token ./install.sh --yes \
+            || echo "installer exited with $? (expected: the bot can't log in with a fake token)"
+          sudo systemd-analyze verify /etc/systemd/system/comicsbot.service
+          test "$(sudo stat -c '%U:%G %a' /opt/comicsbot/.env)" = "comicsbot:comicsbot 600"
+          sudo cat /opt/comicsbot/discord.log
+          sudo grep -q "Discord rejected the token" /opt/comicsbot/discord.log
+          systemctl show comicsbot -p User -p UnitFileState | tee /dev/stderr | grep -q "User=comicsbot"
+      - name: Upgrade in place, then uninstall
+        run: |
+          cd "$RUNNER_TEMP"/ComicsBot-*/
+          sudo ./install.sh --yes || true
+          sudo grep -q "ci-fake-token" /opt/comicsbot/.env
+          sudo /opt/comicsbot/install.sh --uninstall --purge
+          test ! -e /opt/comicsbot
+          test ! -e /etc/systemd/system/comicsbot.service
+          ! id comicsbot
+
+  # Same on Windows with Windows PowerShell 5.1: a scheduled task that starts at boot (-AtStartup),
+  # because CI has no interactive logon to trigger the default at-logon task.
+  installer-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+      - name: PSScriptAnalyzer
+        shell: pwsh
+        run: |
+          Install-Module PSScriptAnalyzer -Force -Scope CurrentUser
+          # Write-Host is intended (coloured installer output); ShouldProcess makes no sense for an installer script.
+          $issues = Invoke-ScriptAnalyzer -Path install.ps1 -Severity Warning, Error `
+            -ExcludeRule PSAvoidUsingWriteHost, PSUseShouldProcessForStateChangingFunctions
+          $issues | Format-Table -AutoSize -Wrap RuleName, Line, Message
+          if ($issues) { exit 1 }
+      - name: Build release archives
+        run: python scripts/build_release.py --out dist
+      - name: Install (scheduled task)
+        shell: pwsh
+        run: |
+          Expand-Archive (Get-Item dist/ComicsBot-*-windows.zip) -DestinationPath $env:RUNNER_TEMP
+          $src = (Get-ChildItem $env:RUNNER_TEMP -Directory -Filter 'ComicsBot-*')[0].FullName
+          $env:DISCORD_TOKEN = 'ci-fake-token'
+          powershell -NoProfile -ExecutionPolicy Bypass -File "$src\install.ps1" -AtStartup -Yes
+          "installer exit code: $LASTEXITCODE (non-zero expected: the bot can't log in with a fake token)"
+          $dir = "$env:LOCALAPPDATA\ComicsBot"
+          $task = Get-ScheduledTask -TaskName ComicsBot
+          "task: $($task.Principal.UserId), logon type $($task.Principal.LogonType), time limit $($task.Settings.ExecutionTimeLimit)"
+          if ($task.Principal.LogonType -ne 'S4U') { throw 'task should run without a logon (S4U)' }
+          if ($task.Settings.ExecutionTimeLimit -ne 'PT0S') { throw 'task must not have a run-time limit' }
+          $readers = (Get-Acl "$dir\.env").Access.IdentityReference.Value
+          "'.env' readable by: $($readers -join ', ')"
+          if ($readers -match 'Users|Everyone|Administrators') { throw '.env must only be readable by its owner' }
+          if ([IO.File]::ReadAllBytes("$dir\.env")[0] -eq 0xEF) { throw '.env must not start with a byte-order mark' }
+          $log = "$dir\discord.log"
+          foreach ($i in 1..30) {
+            if ((Test-Path $log) -and (Select-String -Quiet -Path $log -Pattern 'Discord rejected the token')) { break }
+            Start-Sleep -Seconds 2
+          }
+          Get-Content $log -ErrorAction SilentlyContinue
+          if (-not (Select-String -Quiet -Path $log -Pattern 'Discord rejected the token')) { throw 'bot did not run' }
+          exit 0
+      - name: Upgrade in place, then uninstall
+        shell: pwsh
+        run: |
+          $src = (Get-ChildItem $env:RUNNER_TEMP -Directory -Filter 'ComicsBot-*')[0].FullName
+          $dir = "$env:LOCALAPPDATA\ComicsBot"
+          powershell -NoProfile -ExecutionPolicy Bypass -File "$src\install.ps1" -AtStartup -Yes
+          if (-not (Select-String -Quiet -Path "$dir\.env" -Pattern 'ci-fake-token')) { throw 'settings lost on upgrade' }
+          powershell -NoProfile -ExecutionPolicy Bypass -File "$dir\install.ps1" -Uninstall -Purge
+          if (Get-ScheduledTask -TaskName ComicsBot -ErrorAction SilentlyContinue) { throw 'task not removed' }
+          if (Test-Path $dir) { throw 'install folder not removed' }
+          exit 0
