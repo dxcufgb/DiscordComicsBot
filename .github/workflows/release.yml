@@ -31,8 +31,14 @@ jobs:
         run: |
           files=(dist/*.tar.gz dist/*.zip dist/SHA256SUMS)
           if gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
-            # The release was drafted in the GitHub UI; attach the archives to it.
+            # The release was created in the GitHub UI; attach the archives to it and put the
+            # install instructions above its description (once, so re-runs don't repeat them).
             gh release upload "$GITHUB_REF_NAME" "${files[@]}" --clobber
+            body="$(gh release view "$GITHUB_REF_NAME" --json body --jq .body)"
+            if ! grep -q '^## Install' <<< "$body"; then
+              { cat dist/RELEASE_NOTES.md; echo; printf '%s\n' "$body"; } > dist/notes.md
+              gh release edit "$GITHUB_REF_NAME" --notes-file dist/notes.md
+            fi
           else
             gh release create "$GITHUB_REF_NAME" "${files[@]}" --verify-tag \
               --title "ComicsBot $GITHUB_REF_NAME" --notes-file dist/RELEASE_NOTES.md --generate-notes
