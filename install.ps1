@@ -300,6 +300,7 @@ function Install-Bot {
     }
 
     $envFile = Join-Path $InstallDir '.env'
+    Write-Step "Writing the settings to $envFile"
     if (-not (Test-Path $envFile)) {
         Copy-Item (Join-Path $InstallDir '.env.example') $envFile
         if (-not $Token) { $Token = Read-Token }
@@ -366,16 +367,21 @@ function Uninstall-Bot {
     Write-Step 'ComicsBot has been uninstalled'
 }
 
-if ($Uninstall) {
-    Uninstall-Bot
-} elseif ($Stop) {
-    Stop-Bot
-    Write-Step 'ComicsBot stopped (it starts again at the next logon/startup, or with install.bat -Restart)'
-} elseif ($Restart) {
-    if (-not (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue)) { Stop-WithError 'ComicsBot is not installed.' }
-    Stop-Bot
-    Start-ScheduledTask -TaskName $TaskName
-    Write-Step 'ComicsBot restarted'
-} else {
-    Install-Bot
+try {
+    if ($Uninstall) {
+        Uninstall-Bot
+    } elseif ($Stop) {
+        Stop-Bot
+        Write-Step 'ComicsBot stopped (it starts again at the next logon/startup, or with install.bat -Restart)'
+    } elseif ($Restart) {
+        if (-not (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue)) { Stop-WithError 'ComicsBot is not installed.' }
+        Stop-Bot
+        Start-ScheduledTask -TaskName $TaskName
+        Write-Step 'ComicsBot restarted'
+    } else {
+        Install-Bot
+    }
+} catch {
+    # Unexpected errors would otherwise only reach a console window that may already be gone.
+    Stop-WithError "$($_.Exception.Message)`n$($_.InvocationInfo.PositionMessage)"
 }
