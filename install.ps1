@@ -48,11 +48,24 @@ $InstallDir = [IO.Path]::GetFullPath($InstallDir).TrimEnd('\')
 $AppFiles = @('ComicsBot.py', 'comicsbot', 'requirements.txt', 'start-bot.bat', 'install.ps1', 'install.bat',
               '.env.example', 'README.md', 'VERSION')
 $DataFiles = @('.env', 'state.json', 'comics.json')
+# Everything shown is also appended here, so a run started from the setup.exe (whose console window
+# closes) can still be diagnosed.
+$LogFile = Join-Path $InstallDir 'install.log'
 
-function Write-Step([string]$Message) { Write-Host "==> $Message" -ForegroundColor Cyan }
+function Add-InstallLog([string]$Message) {
+    if (Test-Path -LiteralPath $InstallDir -PathType Container) {
+        Add-Content -LiteralPath $LogFile -Value "$(Get-Date -Format 's') $Message" -ErrorAction SilentlyContinue
+    }
+}
+
+function Write-Step([string]$Message) {
+    Write-Host "==> $Message" -ForegroundColor Cyan
+    Add-InstallLog "==> $Message"
+}
 
 function Stop-WithError([string]$Message) {
     Write-Host "Error: $Message" -ForegroundColor Red
+    Add-InstallLog "Error: $Message"
     exit 1
 }
 
@@ -73,7 +86,7 @@ function Invoke-Native([string]$Exe, [string[]]$Arguments, [switch]$ShowOutput) 
     $ErrorActionPreference = 'Continue'
     try {
         if ($ShowOutput) {
-            & $Exe @Arguments 2>&1 | ForEach-Object { Write-Host "    $_" }
+            & $Exe @Arguments 2>&1 | ForEach-Object { Write-Host "    $_"; Add-InstallLog "    $_" }
         } else {
             & $Exe @Arguments 2>&1 | Out-Null
         }

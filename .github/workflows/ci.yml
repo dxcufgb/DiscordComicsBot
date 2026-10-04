@@ -139,6 +139,7 @@ jobs:
           Get-Content "$env:RUNNER_TEMP\setup.log" -Tail 25
           if ($p.ExitCode -ne 0) { throw "setup exited with $($p.ExitCode)" }
           $dir = "$env:LOCALAPPDATA\ComicsBot"
+          "--- install.log"; Get-Content "$dir\install.log" -ErrorAction SilentlyContinue
           $key = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\{E6949408-6B7C-479B-887F-4C546A3B2278}_is1'
           "registered: $((Get-ItemProperty $key).DisplayName) $((Get-ItemProperty $key).DisplayVersion)"
           $task = Get-ScheduledTask -TaskName ComicsBot

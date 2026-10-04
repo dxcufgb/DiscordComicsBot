@@ -145,11 +145,11 @@ begin
   if not PowerShell(Params, SW_SHOW, Code) then
     Code := -1;
   SetEnvironmentVariable('DISCORD_TOKEN', '');
-  Log(Format('install.ps1 exit code: %d', [Code]));
+  Log(Format('install.ps1 exit code: %d (see install.log in the install folder)', [Code]));
   if Code <> 0 then
     SuppressibleMsgBox('ComicsBot was installed, but the bot did not log in to Discord.' + #13#10#13#10 +
       'Check the token in "ComicsBot settings (.env)" in the Start menu, then use "Restart ComicsBot". ' +
-      'Details are in "ComicsBot log".', mbError, MB_OK, IDOK);
+      'Details are in "ComicsBot log" and in ' + ExpandConstant('{app}') + '\install.log.', mbError, MB_OK, IDOK);
 end;
 
 function InitializeUninstall(): Boolean;
