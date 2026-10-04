@@ -38,6 +38,15 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+# Started from PowerShell 7, or from a program it launched (such as the setup.exe), Windows PowerShell
+# inherits PSModulePath entries for PowerShell 7, whose modules (Get-Acl, ...) fail to load in 5.1.
+if ($PSVersionTable.PSEdition -ne 'Core') {
+    $env:PSModulePath = @(
+        (Join-Path ([Environment]::GetFolderPath('MyDocuments')) 'WindowsPowerShell\Modules'),
+        [Environment]::ExpandEnvironmentVariables([Environment]::GetEnvironmentVariable('PSModulePath', 'Machine')),
+        (Join-Path $PSHOME 'Modules')
+    ) -join ';'
+}
 $TaskName = 'ComicsBot'
 $SourceDir = $PSScriptRoot
 # Run from an installed folder (install.bat -Restart etc.), act on that folder by default.
