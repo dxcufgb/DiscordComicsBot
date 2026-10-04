@@ -22,7 +22,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
         with:
-          python-version: "3.13"
+          python-version: "3.14"
       - name: Build archives
         run: python scripts/build_release.py --version "${GITHUB_REF_NAME#v}" --out dist
       - name: Publish release
