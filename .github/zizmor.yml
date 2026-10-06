@@ -1,0 +1,7 @@
+# zizmor settings for the workflow-lint check.
+rules:
+  # zizmor suggests GitHub's new "$/..." syntax for calling this repo's own ci.yml from release.yml.
+  # The usual "./.github/workflows/ci.yml" form is equivalent and supported everywhere (actionlint
+  # does not know the new syntax yet), so keep it.
+  self-repository:
+    disable: true
