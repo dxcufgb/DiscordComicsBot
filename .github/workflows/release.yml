@@ -28,8 +28,10 @@ jobs:
     needs: test
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.14"
       - name: Build setup.exe
@@ -37,7 +39,7 @@ jobs:
         run: |
           python scripts/build_release.py --out dist
           ./scripts/build_setup.ps1 -OutDir dist
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: setup-exe
           path: dist/*-setup.exe
@@ -49,21 +51,26 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.14"
       - name: Determine the tag
         id: tag
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           version="$(python -c 'import comicsbot; print(comicsbot.__version__)')"
           if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
-            if [[ "$GITHUB_REF" != "refs/heads/${{ github.event.repository.default_branch }}" ]]; then
+            if [[ "$GITHUB_REF" != "refs/heads/$DEFAULT_BRANCH" ]]; then
               echo "::error::Run this workflow on the default branch (got $GITHUB_REF)."
               exit 1
             fi
             tag="v$version"
-            if git ls-remote --exit-code --tags origin "refs/tags/$tag" > /dev/null; then
+            if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" >/dev/null 2>&1; then
               echo "::error::Tag $tag already exists. Bump the version in comicsbot/__init__.py and pyproject.toml first."
               exit 1
             fi
@@ -73,8 +80,10 @@ jobs:
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "Releasing $tag from $GITHUB_SHA"
       - name: Build archives
-        run: python scripts/build_release.py --expect-version "${{ steps.tag.outputs.tag }}" --out dist
-      - uses: actions/download-artifact@v8
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: python scripts/build_release.py --expect-version "$TAG" --out dist
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: setup-exe
           path: dist
