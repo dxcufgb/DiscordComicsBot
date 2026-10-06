@@ -5,14 +5,27 @@
   "timezone": "Europe/Stockholm",
   "packageRules": [
     {
-      "description": "Group the dev tools so they arrive as one PR",
+      "description": "Group the dev tools so they arrive as one PR, and auto-merge it when CI passes",
       "matchFileNames": ["requirements-dev.txt"],
-      "groupName": "dev tools"
+      "matchDepNames": ["pytest", "ruff"],
+      "groupName": "dev tools",
+      "automerge": true
     },
     {
-      "description": "Group GitHub Actions updates",
+      "description": "Group GitHub Actions updates and auto-merge them when CI passes",
       "matchManagers": ["github-actions"],
-      "groupName": "github actions"
+      "groupName": "github actions",
+      "automerge": true
+    },
+    {
+      "description": "Major updates of the bot's runtime libraries need a manual look",
+      "matchFileNames": ["requirements.txt"],
+      "matchUpdateTypes": ["major"],
+      "labels": ["breaking"]
     }
-  ]
+  ],
+  "vulnerabilityAlerts": {
+    "enabled": true,
+    "labels": ["security"]
+  }
 }
