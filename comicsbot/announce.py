@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
@@ -100,6 +101,15 @@ def load_release_notes(base_dir: Path, version: str = __version__) -> ReleaseNot
     return notes
 
 
+def strip_install_section(body: str) -> str:
+    """Drop the leading "## Install" section of the release notes: admins want the changes, not install steps."""
+    text = body.strip()
+    if re.match(r"##\s+Install\b", text):
+        following = re.search(r"^##\s", text[2:], re.M)
+        text = text[2 + following.start() :].strip() if following else ""
+    return text
+
+
 def _same_version(a: str, b: str) -> bool:
     try:
         return parse_version(a) == parse_version(b)
@@ -125,15 +135,18 @@ def build_embed(notes: ReleaseNotes, servers: Iterable[str]) -> discord.Embed:
     footer = "You get this because you administer a server that uses ComicsBot."
     used = len(title) + len(field_name) + len(field_value) + len(footer)
     limit = min(DESCRIPTION_LIMIT, EMBED_LIMIT - used)
-    body = notes.body.strip() or "No release notes were published for this version."
-    description = _truncate(body, limit, f"\n\n[Full release notes]({notes.url})")
+    body = strip_install_section(notes.body)
+    if body:
+        description = _truncate(body, limit, f"\n\n[Full release notes]({notes.url})")
+    else:
+        description = f"[Release on GitHub]({notes.url})"
     embed = discord.Embed(title=title, url=notes.url, description=description, colour=discord.Colour.blurple())
     embed.add_field(name=field_name, value=field_value, inline=False)
     embed.set_footer(text=footer)
     return embed
 
 
-def collect_recipients(guilds: Iterable[Any], mode: str, members_intent: bool) -> dict[int, list[str]]:
+def collect_recipients(guilds: Iterable[Any], mode: str) -> dict[int, list[str]]:
     """Map user id -> names of the servers they administer (owner, plus Administrator members)."""
     recipients: dict[int, list[str]] = {}
 
@@ -145,7 +158,7 @@ def collect_recipients(guilds: Iterable[Any], mode: str, members_intent: bool) -
         return recipients
     for guild in guilds:
         add(guild.owner_id, guild)
-        if mode == "admins" and members_intent:
+        if mode == "admins":
             for member in guild.members:
                 if not member.bot and member.guild_permissions.administrator:
                     add(member.id, guild)

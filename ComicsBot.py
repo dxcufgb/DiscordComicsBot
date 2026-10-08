@@ -73,7 +73,11 @@ def run_bot(config: Config, log: logging.Logger) -> int:
         log.error("Discord rejected the token; check DISCORD_TOKEN in .env")
         return EXIT_CONFIG_ERROR
     except discord.PrivilegedIntentsRequired:
-        log.error("The bot requested an intent that is not enabled in the Developer Portal")
+        log.error(
+            "Discord refused the Server Members intent. Open https://discord.com/developers/applications, "
+            "select the bot's application, go to Bot -> Privileged Gateway Intents, turn on "
+            '"Server Members Intent", save, then start the bot again'
+        )
         return EXIT_CONFIG_ERROR
     except Exception as exc:
         # Log it so the crash shows up in discord.log, not only on the console.

@@ -5,7 +5,9 @@ A Discord bot that watches RSS/Atom feeds of web comics and posts new strips to 
 ## Setup
 
 1. Create an application at <https://discord.com/developers/applications>. Under **Bot**, reset and copy the token.
-   No privileged intents are needed.
+   **Under Bot → Privileged Gateway Intents, turn on "Server Members Intent" and save.** The bot needs it to find
+   the server admins it sends update notices to; without it Discord refuses the login and the bot stops with an
+   error in `discord.log` saying so (it is not restarted over and over).
 2. Invite the bot with this URL, replacing `CLIENT_ID` with your application ID:
    `https://discord.com/oauth2/authorize?client_id=CLIENT_ID&scope=bot+applications.commands&permissions=19456`
    (View Channel, Send Messages, Embed Links).
@@ -51,7 +53,8 @@ same way (`install.bat -AtStartup` as administrator to start at boot) and is man
 | Uninstall (keeps `.env` and data) | `--uninstall` | `-Uninstall` |
 | Uninstall everything | `--uninstall --purge` | `-Uninstall -Purge` |
 
-Upgrades keep `.env`, `state.json` and the log.
+Upgrades keep `.env`, `state.json` and the log. **Upgrading from 2.2.0 or older:** first turn on
+"Server Members Intent" for the bot in the Developer Portal (see Setup), or the new version cannot log in.
 
 ### Automatic updates
 
@@ -103,14 +106,16 @@ Automatic updates work from the first release that includes the updater; install
 ### Update notices to server admins
 
 When the bot starts on a newer version than it ran before (after an automatic or a manual upgrade), it sends one DM
-per person to the admins of the servers it is in: "ComicsBot updated to vX.Y.Z" with the release notes (from GitHub
-after an automatic update, otherwise the `RELEASE_NOTES.md` shipped in the release) and the servers it applies to.
-Each version is announced once; a fresh install only records its version. Set in `.env`:
+per person to the admins of the servers it is in: "ComicsBot updated to vX.Y.Z" with the release's changes and the
+servers it applies to. The changes come from the GitHub release after an automatic update; the release's "Install"
+section is left out. After a manual upgrade only the bundled `RELEASE_NOTES.md` is available, which holds just the
+install steps, so the DM shows the version and a link to the release.
+Each version is announced once; a fresh install only records its version. Finding the Administrator members uses
+the **Server Members Intent**, which must be enabled in the Developer Portal (see Setup). Set in `.env`:
 
 | Setting | Default | Meaning |
 |---|---|---|
 | `UPDATE_NOTIFY` | `admins` | `admins`: server owners and members with the Administrator permission; `owner`: owners only; `off`: no DMs |
-| `MEMBERS_INTENT` | `false` | Finding Administrator members needs Discord's privileged **Server Members Intent**. Enable it under **Bot** in the [Developer Portal](https://discord.com/developers/applications), then set this to `true`. Without it, `admins` reaches server owners only. Setting it to `true` without enabling the intent makes the login fail. |
 
 Admins who have DMs from server members turned off are skipped (logged, not retried).
 

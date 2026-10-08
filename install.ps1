@@ -255,6 +255,8 @@ function Read-Secret([string]$Prompt) {
 function Read-Token {
     if ($Unattended) { Stop-WithError 'A bot token is required, but -Unattended never asks for one.' }
     Write-Host 'Paste the bot token from https://discord.com/developers/applications (Bot -> Reset Token).'
+    Write-Host 'On that Bot page, also turn on "Server Members Intent" (Privileged Gateway Intents) and save;'
+    Write-Host 'without it Discord refuses the login.'
     return Read-Secret 'Discord bot token'
 }
 

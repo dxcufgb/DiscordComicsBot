@@ -92,7 +92,7 @@ def test_no_notes_at_all(tmp_path):
     assert notes.body == ""
     embed = announce.build_embed(notes, ["A"])
     assert embed.title == "ComicsBot updated to v2.3.0"
-    assert "No release notes" in embed.description
+    assert embed.description == "[Release on GitHub](https://github.com/dxcufgb/DiscordComicsBot/releases/tag/v2.3.0)"
 
 
 # -- recipients ---------------------------------------------------------------------
@@ -109,14 +109,13 @@ GUILDS = [
 ]
 
 
-def test_admins_with_members_intent_are_deduplicated():
-    assert announce.collect_recipients(GUILDS, "admins", True) == {1: ["Alpha"], 2: ["Alpha", "Beta"]}
+def test_admins_are_owners_plus_administrators_deduplicated():
+    assert announce.collect_recipients(GUILDS, "admins") == {1: ["Alpha"], 2: ["Alpha", "Beta"]}
 
 
-def test_without_members_intent_only_owners():
-    assert announce.collect_recipients(GUILDS, "admins", False) == {1: ["Alpha"], 2: ["Beta"]}
-    assert announce.collect_recipients(GUILDS, "owner", True) == {1: ["Alpha"], 2: ["Beta"]}
-    assert announce.collect_recipients(GUILDS, "off", True) == {}
+def test_owner_and_off_modes():
+    assert announce.collect_recipients(GUILDS, "owner") == {1: ["Alpha"], 2: ["Beta"]}
+    assert announce.collect_recipients(GUILDS, "off") == {}
 
 
 # -- embed ---------------------------------------------------------------------------
@@ -225,8 +224,8 @@ def test_on_ready_announces_an_upgrade_once(tmp_path, monkeypatch, caplog):
     assert len(sent) == 1
     notes, recipients = sent[0]
     assert notes.body.startswith("## What's Changed")
-    assert recipients == {1: ["Alpha"], 2: ["Beta"]}  # no members intent: owners only
-    assert "MEMBERS_INTENT=true" in caplog.text
+    assert recipients == {1: ["Alpha"], 2: ["Alpha", "Beta"]}
+    assert bot.intents.members
     assert State.load(tmp_path / "state.json").bot_version == announce.__version__
 
 
@@ -242,14 +241,6 @@ def test_on_ready_first_run_and_off(tmp_path, monkeypatch):
     run_ready(bot)
     assert sent == []
     assert state.bot_version == announce.__version__
-
-
-def test_on_ready_admins_with_intent(tmp_path, monkeypatch):
-    bot, state, sent = make_bot(tmp_path, monkeypatch, members_intent=True)
-    assert bot.intents.members
-    state.bot_version = "0.1.0"
-    run_ready(bot)
-    assert sent[0][1] == {1: ["Alpha"], 2: ["Alpha", "Beta"]}
 
 
 def test_on_ready_never_crashes(tmp_path, monkeypatch, caplog):
@@ -278,9 +269,40 @@ def test_update_notify_is_validated(tmp_path, monkeypatch, value):
 def test_config_defaults(tmp_path, monkeypatch):
     from comicsbot.config import load_config
 
-    for key in ("UPDATE_NOTIFY", "MEMBERS_INTENT"):
-        monkeypatch.delenv(key, raising=False)
+    monkeypatch.delenv("UPDATE_NOTIFY", raising=False)
     monkeypatch.setenv("DISCORD_TOKEN", "x")
     config = load_config(tmp_path)
     assert config.update_notify == "admins"
-    assert config.members_intent is False
+    assert not hasattr(config, "members_intent")
+
+
+# -- install section and intent error ----------------------------------------------------
+
+
+def test_install_section_is_stripped():
+    body = "## Install\n\nRun install.sh\n\n\n## What's Changed\n* Fix by @x\n\n**Full Changelog**: link"
+    assert announce.strip_install_section(body) == "## What's Changed\n* Fix by @x\n\n**Full Changelog**: link"
+    assert announce.strip_install_section("## Install\n\nonly steps\n### Sub\nmore") == ""
+    assert announce.strip_install_section("## What's Changed\n* a") == "## What's Changed\n* a"
+    embed = announce.build_embed(announce.ReleaseNotes(version="2.3.0", body="## Install\nsteps"), ["A"])
+    assert embed.description.startswith("[Release on GitHub](")
+
+
+def test_missing_members_intent_exits_with_a_config_error(tmp_path, monkeypatch, caplog):
+    import importlib.util
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent
+    spec = importlib.util.spec_from_file_location("comicsbot_main", root / "ComicsBot.py")
+    main = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(main)
+
+    def refuse(self, token, **kwargs):
+        raise discord.PrivilegedIntentsRequired(shard_id=None)
+
+    monkeypatch.setattr(ComicsBot, "run", refuse)
+    config = Config(token="secret-token", base_dir=tmp_path)
+    code = main.run_bot(config, logging.getLogger("comicsbot"))
+    assert code == main.EXIT_CONFIG_ERROR == 78
+    assert "Server Members Intent" in caplog.text
+    assert "Traceback" not in caplog.text and "secret-token" not in caplog.text

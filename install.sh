@@ -381,6 +381,8 @@ do_install() {
         cp "$INSTALL_DIR/.env.example" "$INSTALL_DIR/.env"
         if [ -z "$TOKEN" ] && [ -t 0 ]; then
             echo "Paste the bot token from https://discord.com/developers/applications (Bot -> Reset Token)."
+            echo "On that Bot page, also turn on \"Server Members Intent\" (Privileged Gateway Intents) and save;"
+            echo "without it Discord refuses the login."
             read -r -s -p "Discord bot token: " TOKEN
             echo
         fi

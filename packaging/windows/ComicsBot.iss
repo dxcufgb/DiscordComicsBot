@@ -112,7 +112,9 @@ begin
     'The token lets ComicsBot log in to Discord.',
     'Create an application at https://discord.com/developers/applications, open Bot and click ' +
     'Reset Token, then paste the token here. It is stored in %LOCALAPPDATA%\ComicsBot\.env, ' +
-    'readable only by your Windows account.');
+    'readable only by your Windows account.' + #13#10#13#10 +
+    'On the same Bot page, turn on "Server Members Intent" under Privileged Gateway Intents and save. ' +
+    'Without it Discord refuses the login.');
   TokenPage.Add('Bot token:', True);
   GitHubTokenPage := CreateInputQueryPage(TokenPage.ID, 'GitHub token for automatic updates',
     'New releases are downloaded from the private GitHub repository dxcufgb/DiscordComicsBot.',

@@ -27,11 +27,12 @@ class ComicsBot(discord.Client):
         # The bot has no voice features; skip the "PyNaCl/davey not installed" warnings.
         discord.VoiceClient.warn_nacl = False
         discord.VoiceClient.warn_dave = False
-        # Slash commands need no privileged intents (no message content).
+        # Slash commands need no message content. The privileged Server Members intent is used to
+        # find the members with the Administrator permission for update DMs; it must be enabled
+        # under Bot in the Developer Portal (ComicsBot.py explains that if the login fails).
         intents = discord.Intents.none()
         intents.guilds = True
-        # Only to find server admins for update DMs; privileged, so off unless MEMBERS_INTENT=true.
-        intents.members = config.members_intent
+        intents.members = True
         super().__init__(
             intents=intents,
             allowed_mentions=discord.AllowedMentions.none(),
@@ -99,12 +100,7 @@ class ComicsBot(discord.Client):
         mode = self.config.update_notify
         if mode == "off":
             return
-        if mode == "admins" and not self.config.members_intent:
-            log.info(
-                "Update notices go to server owners only. To include every member with the Administrator "
-                "permission, enable the Server Members intent in the Developer Portal and set MEMBERS_INTENT=true"
-            )
-        recipients = announce.collect_recipients(self.guilds, mode, self.config.members_intent)
+        recipients = announce.collect_recipients(self.guilds, mode)
         self.run_in_background(self._announce(notes, recipients))
 
     async def _announce(self, notes: announce.ReleaseNotes, recipients: dict[int, list[str]]) -> None:
