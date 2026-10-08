@@ -298,8 +298,9 @@ remove_updater() {
 }
 
 require_installed() {
-    [ -f "$INSTALL_DIR/VERSION" ] && [ -f "$INSTALL_DIR/ComicsBot.py" ] \
-        || die "ComicsBot is not installed in $INSTALL_DIR (use --dir)"
+    if [ ! -f "$INSTALL_DIR/VERSION" ] || [ ! -f "$INSTALL_DIR/ComicsBot.py" ]; then
+        die "ComicsBot is not installed in $INSTALL_DIR (use --dir)"
+    fi
 }
 
 do_enable_update() {
@@ -310,8 +311,9 @@ do_enable_update() {
 
 do_check_update() {
     require_installed
-    [ -f "$UPDATER_DIR/updater.py" ] && [ -s "$UPDATE_TOKEN_FILE" ] \
-        || die "automatic updates are not enabled; run: sudo $SCRIPT --enable-auto-update"
+    if [ ! -f "$UPDATER_DIR/updater.py" ] || [ ! -s "$UPDATE_TOKEN_FILE" ]; then
+        die "automatic updates are not enabled; run: sudo $SCRIPT --enable-auto-update"
+    fi
     ensure_python > /dev/null
     "$PYTHON" -I "$UPDATER_DIR/updater.py" --install-dir "$INSTALL_DIR" --token-file "$UPDATE_TOKEN_FILE" \
         --lock-file "$UPDATE_LOCK" --check
