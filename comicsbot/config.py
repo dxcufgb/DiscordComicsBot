@@ -42,6 +42,10 @@ class Config:
     owner_ids: frozenset[int] = frozenset()
     christmas_greeting: bool = True
     allow_private_feed_urls: bool = False
+    # Who gets a DM after an update: "admins" (owner + Administrator members), "owner" or "off".
+    update_notify: str = "admins"
+    # Request the privileged Server Members intent (must also be enabled in the Developer Portal).
+    members_intent: bool = False
     # COMICS-CHANNEL-<guild id> values from a pre-2.0 .env, used once to migrate.
     legacy_channels: dict[int, int] = field(default_factory=dict)
 
@@ -110,6 +114,10 @@ def load_config(base_dir: Path) -> Config:
             raise ConfigError(f"OWNER_IDS must be Discord user IDs, got {part!r}")
         owner_ids.add(int(part))
 
+    update_notify = (env.get("UPDATE_NOTIFY") or "admins").strip().lower()
+    if update_notify not in ("admins", "owner", "off"):
+        raise ConfigError(f"UPDATE_NOTIFY must be admins, owner or off, got {update_notify!r}")
+
     legacy_channels = {}
     for key, value in env.items():
         if key.startswith("COMICS-CHANNEL-") and value and value.strip().isdigit():
@@ -125,5 +133,7 @@ def load_config(base_dir: Path) -> Config:
         owner_ids=frozenset(owner_ids),
         christmas_greeting=_bool(env.get("CHRISTMAS_GREETING"), True),
         allow_private_feed_urls=_bool(env.get("ALLOW_PRIVATE_FEED_URLS"), False),
+        update_notify=update_notify,
+        members_intent=_bool(env.get("MEMBERS_INTENT"), False),
         legacy_channels=legacy_channels,
     )

@@ -100,6 +100,20 @@ Unattended Windows setup: set `COMICSBOT_GITHUB_TOKEN` and add `autoupdate` to `
 
 Automatic updates work from the first release that includes the updater; install that one by hand.
 
+### Update notices to server admins
+
+When the bot starts on a newer version than it ran before (after an automatic or a manual upgrade), it sends one DM
+per person to the admins of the servers it is in: "ComicsBot updated to vX.Y.Z" with the release notes (from GitHub
+after an automatic update, otherwise the `RELEASE_NOTES.md` shipped in the release) and the servers it applies to.
+Each version is announced once; a fresh install only records its version. Set in `.env`:
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `UPDATE_NOTIFY` | `admins` | `admins`: server owners and members with the Administrator permission; `owner`: owners only; `off`: no DMs |
+| `MEMBERS_INTENT` | `false` | Finding Administrator members needs Discord's privileged **Server Members Intent**. Enable it under **Bot** in the [Developer Portal](https://discord.com/developers/applications), then set this to `true`. Without it, `admins` reaches server owners only. Setting it to `true` without enabling the intent makes the login fail. |
+
+Admins who have DMs from server members turned off are skipped (logged, not retried).
+
 ### Run from source
 
 Copy `.env.example` to `.env`, set `DISCORD_TOKEN`, then:

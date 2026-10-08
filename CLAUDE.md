@@ -15,6 +15,8 @@ and Windows (scheduled task + Inno Setup wizard) installers.
 - `comicsbot/feeds.py` – fetching/parsing feeds and SSRF protection.
 - `comicsbot/updater.py` – opt-in auto-updater (stdlib only, self-contained: the installers run a copy of it
   outside the package; the GitHub token goes only to api.github.com and never to logs).
+- `comicsbot/announce.py` – after an upgrade, DMs the release notes to server admins once (version in
+  `state.json`, notes from the updater's `update-notice.json` or the bundled `RELEASE_NOTES.md`).
 - `comicsbot/storage.py` – `State` in `state.json`, atomic writes, migration from old versions.
 - `comicsbot/config.py` – `.env` loading (environment variables override the file; old variable
   names still accepted). `comicsbot/lock.py` – `InstanceLock`.

@@ -11,6 +11,7 @@ import discord
 from discord import app_commands
 from discord.ext import tasks
 
+from . import announce
 from .config import DEFAULT_INTERVAL, Config
 from .feeds import FeedEntry, FeedError, fetch_feed, new_entries, new_session
 from .storage import State
@@ -29,6 +30,8 @@ class ComicsBot(discord.Client):
         # Slash commands need no privileged intents (no message content).
         intents = discord.Intents.none()
         intents.guilds = True
+        # Only to find server admins for update DMs; privileged, so off unless MEMBERS_INTENT=true.
+        intents.members = config.members_intent
         super().__init__(
             intents=intents,
             allowed_mentions=discord.AllowedMentions.none(),
@@ -42,6 +45,7 @@ class ComicsBot(discord.Client):
         self.restart_requested = False
         self._check_lock = asyncio.Lock()
         self._background: set[asyncio.Task[None]] = set()
+        self._startup_done = False
 
     # -- lifecycle --------------------------------------------------------
 
@@ -76,6 +80,36 @@ class ComicsBot(discord.Client):
             len(self.guilds),
             self.config.interval,
         )
+        # on_ready runs again after every reconnect; the update check is once per process.
+        if not self._startup_done:
+            self._startup_done = True
+            try:
+                await self.check_for_update()
+            except Exception:
+                log.exception("Could not check whether ComicsBot was updated")
+
+    async def check_for_update(self) -> None:
+        """After an upgrade, DM the server admins once with the new version's release notes."""
+        previous = announce.detect_update(self.state)
+        self.state.save()  # recorded before sending: a version is announced at most once
+        if previous is None:
+            return
+        log.info("ComicsBot was updated from %s to %s", previous, self.state.bot_version)
+        notes = await asyncio.to_thread(announce.load_release_notes, self.config.base_dir, self.state.bot_version)
+        mode = self.config.update_notify
+        if mode == "off":
+            return
+        if mode == "admins" and not self.config.members_intent:
+            log.info(
+                "Update notices go to server owners only. To include every member with the Administrator "
+                "permission, enable the Server Members intent in the Developer Portal and set MEMBERS_INTENT=true"
+            )
+        recipients = announce.collect_recipients(self.guilds, mode, self.config.members_intent)
+        self.run_in_background(self._announce(notes, recipients))
+
+    async def _announce(self, notes: announce.ReleaseNotes, recipients: dict[int, list[str]]) -> None:
+        sent = await announce.send_announcements(self, notes, recipients)
+        log.info("Sent the update notice for %s to %d of %d server admins", notes.version, sent, len(recipients))
 
     async def on_guild_join(self, guild: discord.Guild) -> None:
         log.info("Joined server %s (%d)", guild.name, guild.id)

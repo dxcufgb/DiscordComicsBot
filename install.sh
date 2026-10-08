@@ -41,7 +41,7 @@ UPDATER_CONF_DIR="/etc/comicsbot"
 UPDATE_TOKEN_FILE="$UPDATER_CONF_DIR/github-token"
 UPDATE_LOCK="/run/comicsbot-update.lock"
 
-APP_FILES=(ComicsBot.py comicsbot requirements.txt start-bot.sh install.sh .env.example README.md VERSION)
+APP_FILES=(ComicsBot.py comicsbot requirements.txt start-bot.sh install.sh .env.example README.md VERSION RELEASE_NOTES.md)
 DATA_FILES=(.env state.json comics.json)
 
 die() { echo "Error: $*" >&2; exit 1; }

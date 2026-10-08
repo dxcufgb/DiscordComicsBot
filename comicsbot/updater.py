@@ -53,6 +53,9 @@ MAX_CHECKSUMS_BYTES = 64 * 1024
 MAX_ARCHIVE_BYTES = 50 * 1024 * 1024
 MAX_EXTRACTED_BYTES = 100 * 1024 * 1024
 INSTALLER_TIMEOUT = 20 * 60  # seconds
+MAX_NOTES_CHARS = 100_000
+# Release notes for the bot, which DMs them to server admins after the update (comicsbot/announce.py).
+UPDATE_NOTICE = "update-notice.json"
 
 # Program files a release installs. They are backed up before an update and put back if it fails;
 # everything else in the install folder (.env, state.json, logs, .venv) is left to the installer.
@@ -68,6 +71,7 @@ PROGRAM_FILES = (
     "start-bot.bat",
     "install.ps1",
     "install.bat",
+    "RELEASE_NOTES.md",
 )
 # Environment variables that must not reach the release installer.
 SECRET_VARIABLES = ("DISCORD_TOKEN", "COMICSBOT_GITHUB_TOKEN", "GITHUB_TOKEN", "GH_TOKEN")
@@ -253,6 +257,9 @@ class Release:
     tag: str
     version: str
     assets: Mapping[str, str]  # asset name -> API download URL
+    name: str = ""
+    body: str = ""  # release notes (markdown)
+    html_url: str = ""
 
 
 def latest_release(token: str, fetch: Fetch) -> Release | None:
@@ -274,7 +281,15 @@ def latest_release(token: str, fetch: Fetch) -> Release | None:
     for asset in data.get("assets") or []:
         if isinstance(asset, dict) and isinstance(asset.get("name"), str) and isinstance(asset.get("url"), str):
             assets[asset["name"]] = asset["url"]
-    return Release(tag=tag, version=version, assets=assets)
+    html_url = data.get("html_url")
+    return Release(
+        tag=tag,
+        version=version,
+        assets=assets,
+        name=str(data.get("name") or "")[:200],
+        body=str(data.get("body") or "")[:MAX_NOTES_CHARS],
+        html_url=html_url if isinstance(html_url, str) and html_url.startswith("https://github.com/") else "",
+    )
 
 
 def current_platform() -> str:
@@ -424,6 +439,27 @@ def restore_program_files(install_dir: Path, backup_dir: Path) -> None:
                 os.chown(path, owner.st_uid, owner.st_gid, follow_symlinks=False)
 
 
+def write_update_notice(install_dir: Path, release: Release) -> Path:
+    """Leave the release notes for the bot (no secrets), readable and deletable by its account."""
+    path = install_dir / UPDATE_NOTICE
+    data = {"version": release.version, "name": release.name, "body": release.body, "html_url": release.html_url}
+    fd, tmp = tempfile.mkstemp(dir=install_dir, prefix=".update-notice-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            # Through the open file, not the path: the bot's user can rename things in its folder.
+            if hasattr(os, "fchown") and os.geteuid() == 0:
+                owner = install_dir.stat()
+                os.fchown(f.fileno(), owner.st_uid, owner.st_gid)
+            if hasattr(os, "fchmod"):
+                os.fchmod(f.fileno(), 0o640)
+            json.dump(data, f, indent=2)
+        os.replace(tmp, path)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
+    return path
+
+
 # -- installer -----------------------------------------------------------------
 
 Runner = Callable[[list[str], int], int]
@@ -561,6 +597,8 @@ def update(
         backup = work / "backup"
         backup_program_files(install_dir, backup)
 
+        # Written before the installer starts the new version, which reads (and deletes) it on startup.
+        notice = write_update_notice(install_dir, release)
         log.info("Installing ComicsBot %s into %s", release.version, install_dir)
         code = runner(installer_command(release_dir, install_dir, platform), INSTALLER_TIMEOUT)
         if code == 0:
@@ -568,6 +606,7 @@ def update(
             return EXIT_OK
 
         log.error("The installer failed (exit code %s); restoring ComicsBot %s", code, installed)
+        notice.unlink(missing_ok=True)
         runner(service_command(install_dir, platform, "stop"), 5 * 60)
         try:
             restore_program_files(install_dir, backup)

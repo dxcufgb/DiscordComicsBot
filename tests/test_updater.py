@@ -46,7 +46,15 @@ class FakeGitHub:
         self.files = dict(files)
         self.requests = []
         assets = [{"name": name, "url": f"{API}/releases/assets/{i}"} for i, name in enumerate(self.files)]
-        self.release = {"tag_name": tag, "draft": draft, "prerelease": prerelease, "assets": assets}
+        self.release = {
+            "tag_name": tag,
+            "name": f"ComicsBot {tag}",
+            "body": "## What's Changed\n* things",
+            "html_url": f"https://github.com/dxcufgb/DiscordComicsBot/releases/tag/{tag}",
+            "draft": draft,
+            "prerelease": prerelease,
+            "assets": assets,
+        }
         self.cdn = {f"{CDN}&n={i}": name for i, name in enumerate(self.files)}
         self.overrides = {}
 
@@ -335,6 +343,14 @@ def test_update_runs_the_release_installer(tmp_path, release_files, caplog, plat
         assert command[5].endswith("install.ps1")
     assert (install / "VERSION").read_text().strip() == __version__
     assert (install / ".env").read_text() == "DISCORD_TOKEN=discord-secret\n"
+    notice = json.loads((install / "update-notice.json").read_text())
+    assert notice == {
+        "version": __version__,
+        "name": f"ComicsBot v{__version__}",
+        "body": "## What's Changed\n* things",
+        "html_url": f"https://github.com/dxcufgb/DiscordComicsBot/releases/tag/v{__version__}",
+    }
+    assert TOKEN not in (install / "update-notice.json").read_text()
     assert TOKEN not in caplog.text
     assert "X-Amz-Signature" not in caplog.text
 
@@ -374,6 +390,7 @@ def test_failed_install_is_rolled_back(tmp_path, release_files, caplog):
     assert not (install / "start-bot.sh").exists()  # added by the failed update, removed again
     assert (install / ".env").read_text() == "DISCORD_TOKEN=discord-secret\n"
     assert (install / "state.json").exists()
+    assert not (install / "update-notice.json").exists()
     assert [c[1:] for c in runner.commands[1:]] == [["stop", "comicsbot"], ["restart", "comicsbot"]]
     assert "restored and restarted" in caplog.text
 

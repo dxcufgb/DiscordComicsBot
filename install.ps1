@@ -81,7 +81,7 @@ $GitHubRepo = 'dxcufgb/DiscordComicsBot'
 $UpdaterDir = Join-Path $InstallDir 'updater'
 $UpdateTokenFile = Join-Path $UpdaterDir 'github-token'
 $AppFiles = @('ComicsBot.py', 'comicsbot', 'requirements.txt', 'start-bot.bat', 'install.ps1', 'install.bat',
-              '.env.example', 'README.md', 'VERSION')
+              '.env.example', 'README.md', 'VERSION', 'RELEASE_NOTES.md')
 $DataFiles = @('.env', 'state.json', 'comics.json')
 # Everything shown is also appended here, so a run started from the setup.exe (whose console window
 # closes) can still be diagnosed.

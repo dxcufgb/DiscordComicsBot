@@ -16,3 +16,4 @@ __pycache__/
 bot.lock
 dist/
 install.log
+update-notice.json
