@@ -7,6 +7,14 @@
 #   sudo ./install.sh --uninstall            Remove the service and program files, keep .env and data
 #   sudo ./install.sh --uninstall --purge    Remove everything, including data and the service user
 #
+# Automatic updates (off unless enabled; see "Automatic updates" in README.md):
+#   sudo ./install.sh --auto-update          Install or upgrade and turn on daily automatic updates
+#   sudo ./install.sh --enable-auto-update   Turn them on for the existing install
+#   sudo ./install.sh --disable-auto-update  Turn them off and delete the GitHub token
+#   sudo ./install.sh --check-update         Only report whether a newer release exists
+#   sudo ./install.sh --update-now           Update to the latest release now
+#   The GitHub token is asked for, or read from COMICSBOT_GITHUB_TOKEN (never pass it as an option).
+#
 # Options:
 #   --dir DIR       Install location (default /opt/comicsbot)
 #   --token TOKEN   Discord bot token (or set DISCORD_TOKEN); asked for when missing
@@ -24,6 +32,14 @@ MIGRATE_FROM=""
 ASSUME_YES=0
 ACTION="install"
 PURGE=0
+AUTO_UPDATE=0
+UPDATE_TOKEN="${COMICSBOT_GITHUB_TOKEN:-}"
+GITHUB_REPO="dxcufgb/DiscordComicsBot"
+UPDATE_UNIT="comicsbot-update"
+UPDATER_DIR="/usr/local/lib/comicsbot-updater"
+UPDATER_CONF_DIR="/etc/comicsbot"
+UPDATE_TOKEN_FILE="$UPDATER_CONF_DIR/github-token"
+UPDATE_LOCK="/run/comicsbot-update.lock"
 
 APP_FILES=(ComicsBot.py comicsbot requirements.txt start-bot.sh install.sh .env.example README.md VERSION)
 DATA_FILES=(.env state.json comics.json)
@@ -37,10 +53,17 @@ confirm() {
     read -r -p "$1 [Y/n] " answer
     [[ -z "$answer" || "$answer" =~ ^[Yy] ]]
 }
+# Like confirm, but the answer defaults to no and --yes does not mean yes.
+ask_no() {
+    [ "$ASSUME_YES" -eq 0 ] && [ -t 0 ] || return 1
+    local answer
+    read -r -p "$1 [y/N] " answer
+    [[ "$answer" =~ ^[Yy] ]]
+}
 
 if [ "$(id -u)" -ne 0 ]; then
     command -v sudo > /dev/null || die "run this script as root"
-    exec sudo --preserve-env=DISCORD_TOKEN,PYTHON bash "$SCRIPT" "$@"
+    exec sudo --preserve-env=DISCORD_TOKEN,COMICSBOT_GITHUB_TOKEN,PYTHON bash "$SCRIPT" "$@"
 fi
 
 while [ $# -gt 0 ]; do
@@ -51,6 +74,11 @@ while [ $# -gt 0 ]; do
         --yes|-y) ASSUME_YES=1; shift ;;
         --uninstall) ACTION="uninstall"; shift ;;
         --purge) PURGE=1; shift ;;
+        --auto-update) AUTO_UPDATE=1; shift ;;
+        --enable-auto-update) ACTION="enable-update"; shift ;;
+        --disable-auto-update) ACTION="disable-update"; shift ;;
+        --check-update) ACTION="check-update"; shift ;;
+        --update-now) ACTION="update-now"; shift ;;
         -h|--help) awk 'NR > 1 && !/^#/ { exit } NR > 1 { sub(/^# ?/, ""); print }' "$SCRIPT"; exit 0 ;;
         *) die "unknown option: $1 (see --help)" ;;
     esac
@@ -160,6 +188,145 @@ set_token() {
     rm -f "$tmp"
 }
 
+# -- automatic updates -----------------------------------------------------
+# A root systemd timer runs comicsbot/updater.py (copied to $UPDATER_DIR, so the bot's user cannot
+# change what root runs) once a day. It downloads the latest release with the GitHub token in
+# $UPDATE_TOKEN_FILE (root only), checks SHA256SUMS and runs that release's install.sh, which
+# keeps .env and the data; if that fails the previous version is restored.
+
+auto_update_enabled() {
+    [ -f "/etc/systemd/system/$UPDATE_UNIT.timer" ]
+}
+
+# Asks for the GitHub token unless one is stored already or given in COMICSBOT_GITHUB_TOKEN.
+need_update_token() {
+    [ -n "$UPDATE_TOKEN" ] && return 0
+    [ -s "$UPDATE_TOKEN_FILE" ] && return 0
+    if [ -t 0 ]; then
+        echo "Automatic updates download releases from the private GitHub repository $GITHUB_REPO."
+        echo "Create a fine-grained token at https://github.com/settings/personal-access-tokens/new with"
+        echo "access to only $GITHUB_REPO and the permission Contents: Read-only, and paste it here."
+        read -r -s -p "GitHub token: " UPDATE_TOKEN
+        echo
+    fi
+    [ -n "$UPDATE_TOKEN" ] || die "automatic updates need a GitHub token: set COMICSBOT_GITHUB_TOKEN"
+}
+
+write_update_token() {
+    [ -n "$UPDATE_TOKEN" ] || return 0
+    local tmp
+    install -d -m 700 -o root -g root "$UPDATER_CONF_DIR"
+    tmp="$(umask 077 && mktemp "$UPDATER_CONF_DIR/.github-token.XXXXXX")"
+    printf '%s\n' "$UPDATE_TOKEN" > "$tmp"
+    chown root:root "$tmp"
+    chmod 600 "$tmp"
+    mv -f "$tmp" "$UPDATE_TOKEN_FILE"
+}
+
+# Installs (or refreshes) the updater and its systemd units. Needs $PYTHON.
+install_updater() {
+    local updater="$INSTALL_DIR/comicsbot/updater.py"
+    [ -f "$updater" ] || die "this ComicsBot version has no updater ($updater is missing)"
+    install -d -m 755 -o root -g root "$UPDATER_DIR"
+    install -m 644 -o root -g root "$updater" "$UPDATER_DIR/updater.py"
+    cat > "/etc/systemd/system/$UPDATE_UNIT.service" <<UNIT
+[Unit]
+Description=Update ComicsBot to the latest release
+Documentation=https://github.com/$GITHUB_REPO#automatic-updates
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+# Runs as root because it runs the release's install.sh, like a manual upgrade.
+ExecStart="$PYTHON" -I "$UPDATER_DIR/updater.py" --install-dir "$INSTALL_DIR" --token-file "$UPDATE_TOKEN_FILE" --lock-file "$UPDATE_LOCK"
+TimeoutStartSec=45min
+UMask=0022
+PrivateTmp=yes
+NoNewPrivileges=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+UNIT
+    cat > "/etc/systemd/system/$UPDATE_UNIT.timer" <<UNIT
+[Unit]
+Description=Daily check for ComicsBot updates
+
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=6h
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+UNIT
+    chmod 644 "/etc/systemd/system/$UPDATE_UNIT.service" "/etc/systemd/system/$UPDATE_UNIT.timer"
+    systemctl daemon-reload
+    systemctl enable --quiet "$UPDATE_UNIT.timer"
+    systemctl start "$UPDATE_UNIT.timer"
+}
+
+enable_auto_update() {
+    need_update_token
+    write_update_token
+    [ -s "$UPDATE_TOKEN_FILE" ] || die "no GitHub token stored in $UPDATE_TOKEN_FILE"
+    install_updater
+    info "Automatic updates are on: checked daily (sudo $INSTALL_DIR/install.sh --check-update to test the token)"
+}
+
+remove_updater() {
+    local unit
+    if [ -f "/etc/systemd/system/$UPDATE_UNIT.timer" ] || [ -f "/etc/systemd/system/$UPDATE_UNIT.service" ]; then
+        info "Removing automatic updates"
+        systemctl disable --now "$UPDATE_UNIT.timer" 2> /dev/null || true
+        for unit in timer service; do
+            rm -f "/etc/systemd/system/$UPDATE_UNIT.$unit"
+        done
+        systemctl daemon-reload
+    fi
+    rm -rf "$UPDATER_DIR"
+    rm -f "$UPDATE_TOKEN_FILE" "$UPDATE_LOCK"
+    rmdir "$UPDATER_CONF_DIR" 2> /dev/null || true
+}
+
+require_installed() {
+    [ -f "$INSTALL_DIR/VERSION" ] && [ -f "$INSTALL_DIR/ComicsBot.py" ] \
+        || die "ComicsBot is not installed in $INSTALL_DIR (use --dir)"
+}
+
+do_enable_update() {
+    require_installed
+    ensure_python
+    enable_auto_update
+}
+
+do_check_update() {
+    require_installed
+    [ -f "$UPDATER_DIR/updater.py" ] && [ -s "$UPDATE_TOKEN_FILE" ] \
+        || die "automatic updates are not enabled; run: sudo $SCRIPT --enable-auto-update"
+    ensure_python > /dev/null
+    "$PYTHON" -I "$UPDATER_DIR/updater.py" --install-dir "$INSTALL_DIR" --token-file "$UPDATE_TOKEN_FILE" \
+        --lock-file "$UPDATE_LOCK" --check
+}
+
+do_update_now() {
+    auto_update_enabled || die "automatic updates are not enabled; run: sudo $SCRIPT --enable-auto-update"
+    local since status=0
+    since="$(date +%s)"
+    info "Updating (this can take a few minutes)"
+    systemctl start "$UPDATE_UNIT.service" || status=$?
+    journalctl -u "$UPDATE_UNIT" --since "@$since" --no-pager -o cat || true
+    [ "$status" -eq 0 ] || die "the update failed (see above, or: journalctl -u $UPDATE_UNIT)"
+}
+
 # -- install ---------------------------------------------------------------
 
 do_install() {
@@ -167,6 +334,12 @@ do_install() {
     if [ -z "$TOKEN" ] && [ ! -f "$INSTALL_DIR/.env" ] && [ ! -f "$MIGRATE_FROM/.env" ] && [ ! -t 0 ]; then
         die "a bot token is required: pass --token or set DISCORD_TOKEN"
     fi
+    # First interactive install: offer automatic updates. Upgrades keep whatever was chosen.
+    if [ "$AUTO_UPDATE" -eq 0 ] && ! auto_update_enabled && [ ! -f "$INSTALL_DIR/.env" ] \
+        && ask_no "Install new ComicsBot releases automatically (checked daily; needs a GitHub token)?"; then
+        AUTO_UPDATE=1
+    fi
+    [ "$AUTO_UPDATE" -eq 1 ] && need_update_token
     ensure_python
     stop_service
 
@@ -232,6 +405,14 @@ do_install() {
     [ -f "$log" ] && before="$(wc -l < "$log")"
     SERVICE_USER="$SERVICE_USER" "$INSTALL_DIR/start-bot.sh" install-service > /dev/null
 
+    if [ "$AUTO_UPDATE" -eq 1 ]; then
+        info "Setting up automatic updates"
+        enable_auto_update
+    elif auto_update_enabled; then
+        info "Updating the automatic updater"
+        install_updater
+    fi
+
     info "Waiting for the bot to log in"
     local _
     for _ in $(seq 1 30); do
@@ -244,6 +425,9 @@ do_install() {
             echo "  Logs:    journalctl -u $SERVICE_NAME -f   (or $log)"
             echo "  Restart: systemctl restart $SERVICE_NAME"
             echo "  Settings: $INSTALL_DIR/.env"
+            if auto_update_enabled; then
+                echo "  Updates: automatic, daily (journalctl -u $UPDATE_UNIT; turn off with --disable-auto-update)"
+            fi
             return 0
         fi
         if ! systemctl is-active --quiet "$SERVICE_NAME"; then
@@ -261,6 +445,7 @@ do_install() {
 # -- uninstall ---------------------------------------------------------------
 
 do_uninstall() {
+    remove_updater
     if [ -f "/etc/systemd/system/$SERVICE_NAME.service" ]; then
         info "Removing the systemd service"
         systemctl disable --now "$SERVICE_NAME" 2> /dev/null || true
@@ -288,4 +473,8 @@ do_uninstall() {
 case "$ACTION" in
     install) do_install ;;
     uninstall) do_uninstall ;;
+    enable-update) do_enable_update ;;
+    disable-update) remove_updater; info "Automatic updates are off" ;;
+    check-update) do_check_update ;;
+    update-now) do_update_now ;;
 esac

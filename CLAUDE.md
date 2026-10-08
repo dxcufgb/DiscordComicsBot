@@ -13,6 +13,8 @@ and Windows (scheduled task + Inno Setup wizard) installers.
   for fetches.
 - `comicsbot/commands.py` – slash commands; owner-only ones use `@app_commands.check(is_bot_owner)`.
 - `comicsbot/feeds.py` – fetching/parsing feeds and SSRF protection.
+- `comicsbot/updater.py` – opt-in auto-updater (stdlib only, self-contained: the installers run a copy of it
+  outside the package; the GitHub token goes only to api.github.com and never to logs).
 - `comicsbot/storage.py` – `State` in `state.json`, atomic writes, migration from old versions.
 - `comicsbot/config.py` – `.env` loading (environment variables override the file; old variable
   names still accepted). `comicsbot/lock.py` – `InstanceLock`.

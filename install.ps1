@@ -23,6 +23,18 @@
     install.bat -Restart
     install.bat -Stop
     install.bat -Uninstall [-Purge]
+
+.EXAMPLE
+    install.bat -EnableAutoUpdate
+    Turn on automatic updates (off by default): a daily scheduled task installs new releases. It asks
+    for a GitHub token (or reads the COMICSBOT_GITHUB_TOKEN variable). Run it from the install folder to
+    change only this setting, or from a release folder to install and turn it on in one go.
+
+.EXAMPLE
+    install.bat -DisableAutoUpdate
+    install.bat -CheckUpdate
+    install.bat -UpdateNow
+    Turn automatic updates off, only check for a newer release, or update right now.
 #>
 [CmdletBinding()]
 param(
@@ -34,7 +46,13 @@ param(
     [switch]$Restart,
     [switch]$Stop,
     [switch]$Uninstall,
-    [switch]$Purge
+    [switch]$Purge,
+    [switch]$EnableAutoUpdate,
+    [switch]$DisableAutoUpdate,
+    [switch]$CheckUpdate,
+    [switch]$UpdateNow,
+    # Used by the automatic updater: never prompt, keep the existing scheduled task and virtual environment.
+    [switch]$Unattended
 )
 
 $ErrorActionPreference = 'Stop'
@@ -54,6 +72,14 @@ if (-not $PSBoundParameters.ContainsKey('InstallDir') -and (Test-Path (Join-Path
     $InstallDir = $SourceDir
 }
 $InstallDir = [IO.Path]::GetFullPath($InstallDir).TrimEnd('\')
+$InPlace = [IO.Path]::GetFullPath($SourceDir).TrimEnd('\') -ieq $InstallDir
+if ($Unattended) { $Yes = [switch]$true }
+# Automatic updates: a scheduled task, running as the same account as the bot, starts the updater
+# (comicsbot\updater.py, copied to $UpdaterDir) once a day.
+$UpdateTaskName = 'ComicsBot-Update'
+$GitHubRepo = 'dxcufgb/DiscordComicsBot'
+$UpdaterDir = Join-Path $InstallDir 'updater'
+$UpdateTokenFile = Join-Path $UpdaterDir 'github-token'
 $AppFiles = @('ComicsBot.py', 'comicsbot', 'requirements.txt', 'start-bot.bat', 'install.ps1', 'install.bat',
               '.env.example', 'README.md', 'VERSION')
 $DataFiles = @('.env', 'state.json', 'comics.json')
@@ -216,15 +242,101 @@ function Protect-SecretFile([string]$Path) {
     }
 }
 
-function Read-Token {
-    Write-Host 'Paste the bot token from https://discord.com/developers/applications (Bot -> Reset Token).'
-    $secure = Read-Host 'Discord bot token' -AsSecureString
+function Read-Secret([string]$Prompt) {
+    $secure = Read-Host $Prompt -AsSecureString
     $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
     try {
         return [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
     } finally {
         [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
     }
+}
+
+function Read-Token {
+    if ($Unattended) { Stop-WithError 'A bot token is required, but -Unattended never asks for one.' }
+    Write-Host 'Paste the bot token from https://discord.com/developers/applications (Bot -> Reset Token).'
+    return Read-Secret 'Discord bot token'
+}
+
+function Test-AutoUpdate {
+    return [bool](Get-ScheduledTask -TaskName $UpdateTaskName -ErrorAction SilentlyContinue)
+}
+
+# Copies the updater out of the program files, so an update never replaces the script that runs it.
+function Copy-Updater {
+    $source = Join-Path $InstallDir 'comicsbot\updater.py'
+    if (-not (Test-Path $source)) { Stop-WithError "This ComicsBot version has no updater ($source is missing)." }
+    New-Item -ItemType Directory -Path $UpdaterDir -Force | Out-Null
+    Copy-Item $source -Destination (Join-Path $UpdaterDir 'updater.py') -Force
+}
+
+function Get-UpdaterArgumentList {
+    return @('-I', (Join-Path $UpdaterDir 'updater.py'), '--install-dir', $InstallDir,
+             '--token-file', $UpdateTokenFile, '--log-file', (Join-Path $UpdaterDir 'update.log'),
+             '--lock-file', (Join-Path $UpdaterDir 'update.lock'))
+}
+
+function Register-UpdateTask {
+    $botTask = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+    if (-not $botTask) { Stop-WithError 'ComicsBot is not installed; install it first.' }
+    # Same account and logon type as the bot: at logon, or without a logon (S4U) when it starts at boot.
+    $logonType = $botTask.Principal.LogonType
+    if ($logonType -eq 'S4U' -and -not (Test-Administrator)) {
+        Stop-WithError 'The bot starts with Windows, so automatic updates need administrator rights to set up: run this as administrator.'
+    }
+    $pythonw = Join-Path $InstallDir '.venv\Scripts\pythonw.exe'
+    if (-not (Test-Path $pythonw)) { Stop-WithError "$pythonw is missing; run install.bat again first." }
+    $argumentLine = (Get-UpdaterArgumentList | ForEach-Object { '"' + $_ + '"' }) -join ' '
+    $action = New-ScheduledTaskAction -Execute $pythonw -Argument $argumentLine -WorkingDirectory $UpdaterDir
+    $trigger = New-ScheduledTaskTrigger -Daily -At '04:00' -RandomDelay (New-TimeSpan -Hours 4)
+    $user = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+    $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType $logonType -RunLevel Limited
+    $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Hours 2) -StartWhenAvailable `
+        -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew
+    Register-ScheduledTask -TaskName $UpdateTaskName -Action $action -Trigger $trigger -Principal $principal `
+        -Settings $settings -Description 'Installs new ComicsBot releases' -Force | Out-Null
+}
+
+function Enable-AutoUpdate {
+    Write-Step 'Setting up automatic updates'
+    Copy-Updater
+    $githubToken = $env:COMICSBOT_GITHUB_TOKEN
+    if (-not $githubToken -and -not (Test-Path $UpdateTokenFile)) {
+        if ($Unattended) { Stop-WithError 'Automatic updates need a GitHub token (the COMICSBOT_GITHUB_TOKEN variable).' }
+        Write-Host "Automatic updates download releases from the private GitHub repository $GitHubRepo."
+        Write-Host 'Create a fine-grained token at https://github.com/settings/personal-access-tokens/new with access'
+        Write-Host "to only $GitHubRepo and the permission Contents: Read-only, and paste it here."
+        $githubToken = Read-Secret 'GitHub token'
+        if (-not $githubToken) { Stop-WithError 'Automatic updates need a GitHub token.' }
+    }
+    if ($githubToken) {
+        # Restrict the empty file first, so the token is never in a file others can read.
+        Write-TextFile $UpdateTokenFile ''
+        Protect-SecretFile $UpdateTokenFile
+        Write-TextFile $UpdateTokenFile ($githubToken.Trim() + "`r`n")
+    }
+    Protect-SecretFile $UpdateTokenFile
+    Register-UpdateTask
+    Write-Step 'Automatic updates are on: checked daily (install.bat -CheckUpdate tests the token)'
+}
+
+function Disable-AutoUpdate {
+    if (Test-AutoUpdate) {
+        Write-Step 'Removing the automatic update task'
+        Unregister-ScheduledTask -TaskName $UpdateTaskName -Confirm:$false
+    }
+    if (Test-Path $UpdaterDir) { Remove-Item $UpdaterDir -Recurse -Force }
+}
+
+function Invoke-Updater([switch]$Check) {
+    if (-not (Test-AutoUpdate) -or -not (Test-Path $UpdateTokenFile)) {
+        Stop-WithError 'Automatic updates are not enabled; run install.bat -EnableAutoUpdate first.'
+    }
+    $python = Join-Path $InstallDir '.venv\Scripts\python.exe'
+    $arguments = Get-UpdaterArgumentList
+    if ($Check) { $arguments += '--check' }
+    $code = Invoke-Native $python $arguments -ShowOutput
+    if ($code -ne 0) { Stop-WithError "The updater failed (exit code $code); see $(Join-Path $UpdaterDir 'update.log')." }
 }
 
 function Register-BotTask {
@@ -277,13 +389,18 @@ function Install-Bot {
     if ($AtStartup -and -not (Test-Administrator)) {
         Stop-WithError '-AtStartup needs administrator rights: right-click install.bat and choose "Run as administrator".'
     }
-    $python = Install-PythonIfMissing
-    Write-Step "Using Python: $($python.Exe) $($python.Args -join ' ')"
+    $venvPython = Join-Path $InstallDir '.venv\Scripts\python.exe'
+    $existingTask = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+    if ($Unattended -and (Test-Path $venvPython)) {
+        Write-Step 'Using the existing virtual environment'
+    } else {
+        $python = Install-PythonIfMissing
+        Write-Step "Using Python: $($python.Exe) $($python.Args -join ' ')"
+    }
     Stop-Bot
 
     New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
-    $inPlace = [IO.Path]::GetFullPath($SourceDir).TrimEnd('\') -ieq $InstallDir
-    if (-not $inPlace) {
+    if (-not $InPlace) {
         Write-Step "Copying program files to $InstallDir"
         Remove-Item (Join-Path $InstallDir 'comicsbot') -Recurse -Force -ErrorAction SilentlyContinue
         foreach ($item in $AppFiles) {
@@ -320,7 +437,6 @@ function Install-Bot {
     }
     Protect-SecretFile $envFile
 
-    $venvPython = Join-Path $InstallDir '.venv\Scripts\python.exe'
     if (-not (Test-Path $venvPython)) {
         Write-Step 'Creating the Python virtual environment'
         $code = Invoke-Native $python.Exe ($python.Args + @('-m', 'venv', (Join-Path $InstallDir '.venv')))
@@ -330,8 +446,21 @@ function Install-Bot {
     $code = Invoke-Native (Join-Path $InstallDir 'start-bot.bat') @('setup') -ShowOutput
     if ($code -ne 0) { Stop-WithError 'Installing the dependencies failed; run start-bot.bat setup to see why.' }
 
-    Write-Step 'Registering the scheduled task'
-    Register-BotTask
+    if ($Unattended -and $existingTask) {
+        # An update keeps the task as it is (re-registering a task that starts at boot needs admin rights).
+        Write-Step 'Keeping the existing scheduled task'
+        if ($existingTask.Principal.LogonType -eq 'S4U') { $AtStartup = [switch]$true }
+    } else {
+        Write-Step 'Registering the scheduled task'
+        Register-BotTask
+    }
+
+    if ($EnableAutoUpdate) {
+        Enable-AutoUpdate
+    } elseif (Test-AutoUpdate) {
+        Write-Step 'Updating the automatic updater'
+        Copy-Updater
+    }
     $logFile = Join-Path $InstallDir 'discord.log'
     $offset = 0
     if (Test-Path $logFile) { $offset = (Get-Item $logFile).Length }
@@ -353,10 +482,14 @@ function Install-Bot {
     Write-Host "  Stop:      install.bat -Stop"
     Write-Host "  Logs:      $logFile"
     Write-Host "  Settings:  $envFile"
+    if (Test-AutoUpdate) {
+        Write-Host "  Updates:   automatic, daily (log: $(Join-Path $UpdaterDir 'update.log'); off: install.bat -DisableAutoUpdate)"
+    }
 }
 
 function Uninstall-Bot {
     Stop-Bot
+    Disable-AutoUpdate
     if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) {
         Write-Step 'Removing the scheduled task'
         Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
@@ -382,6 +515,16 @@ try {
     } elseif ($Stop) {
         Stop-Bot
         Write-Step 'ComicsBot stopped (it starts again at the next logon/startup, or with install.bat -Restart)'
+    } elseif ($DisableAutoUpdate) {
+        Disable-AutoUpdate
+        Write-Step 'Automatic updates are off'
+    } elseif ($CheckUpdate) {
+        Invoke-Updater -Check
+    } elseif ($UpdateNow) {
+        Invoke-Updater
+    } elseif ($EnableAutoUpdate -and $InPlace -and (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue)) {
+        # Run from the install folder: only turn automatic updates on, no reinstall.
+        Enable-AutoUpdate
     } elseif ($Restart) {
         if (-not (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue)) { Stop-WithError 'ComicsBot is not installed.' }
         Stop-Bot

@@ -2,6 +2,7 @@
 REM ComicsBot installer for Windows. Double-click it, or run "install.bat -Help" for options:
 REM   install.bat [-AtStartup] [-MigrateFrom DIR] [-Token TOKEN] [-InstallDir DIR]
 REM   install.bat -Restart ^| -Stop ^| -Uninstall [-Purge]
+REM   install.bat -EnableAutoUpdate ^| -DisableAutoUpdate ^| -CheckUpdate ^| -UpdateNow
 if /i "%~1"=="-Help" (
     powershell.exe -NoProfile -Command "Get-Help '%~dp0install.ps1' -Detailed"
     exit /b 0

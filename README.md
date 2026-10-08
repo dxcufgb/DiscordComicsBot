@@ -53,6 +53,53 @@ same way (`install.bat -AtStartup` as administrator to start at boot) and is man
 
 Upgrades keep `.env`, `state.json` and the log.
 
+### Automatic updates
+
+Off by default. When turned on, the bot checks once a day for a newer release on GitHub and installs it the same way
+a manual upgrade does (the release's own installer), so `.env`, `state.json`, the logs and their permissions are kept.
+
+How it works: the updater (`comicsbot/updater.py`, Python standard library only) asks
+`https://api.github.com/repos/dxcufgb/DiscordComicsBot/releases/latest` for the latest published release (drafts and
+pre-releases are ignored) and does nothing unless its version is newer than the installed one. Otherwise it downloads
+this system's archive (`ComicsBot-X.Y.Z-linux.tar.gz` or `-windows.zip`) and checks it against the release's
+`SHA256SUMS`, extracts it into a new temporary folder and runs its installer. If the installer fails (for example the
+new version does not log in to Discord within 30-45 seconds), the previous program files are put back and the old
+version is restarted. Only one update runs at a time; downloads are HTTPS only, with timeouts and size limits.
+
+**GitHub token.** The repository is private, so the updater needs a token that can read it:
+
+1. Open <https://github.com/settings/personal-access-tokens/new> (Settings → Developer settings → Personal access
+   tokens → Fine-grained tokens → Generate new token).
+2. Resource owner: `dxcufgb`; Repository access: *Only select repositories* → `dxcufgb/DiscordComicsBot`.
+3. Permissions → Repository permissions → **Contents: Read-only** (Metadata: Read-only is added automatically).
+   Nothing else.
+4. Pick an expiration date and generate it. When it expires, updates fail with "GitHub refused the request"; enable
+   automatic updates again with a new token (it replaces the stored one).
+
+The installer asks for the token, or reads it from the `COMICSBOT_GITHUB_TOKEN` environment variable; it is never
+passed on the command line. It is stored apart from the bot's `.env` and sent only to `api.github.com` (the actual
+download is a redirect to GitHub's storage, which is fetched without it). It never appears in a log.
+
+| | Linux | Windows |
+|---|---|---|
+| Turn on while installing | `sudo ./install.sh --auto-update` (an interactive first install also asks) | Check *Install new ComicsBot releases automatically* in the setup, or `install.bat -EnableAutoUpdate` |
+| Turn on later | `sudo /opt/comicsbot/install.sh --enable-auto-update` | `install.bat -EnableAutoUpdate` in the install folder |
+| Turn off (deletes the token) | `sudo /opt/comicsbot/install.sh --disable-auto-update` | `install.bat -DisableAutoUpdate` |
+| Check only (tests the token) | `sudo /opt/comicsbot/install.sh --check-update` | `install.bat -CheckUpdate` |
+| Update now | `sudo /opt/comicsbot/install.sh --update-now` | `install.bat -UpdateNow` |
+| Schedule | systemd timer `comicsbot-update.timer`, daily with up to 6 h random delay, runs missed checks after boot | Scheduled task `ComicsBot-Update`, daily between 04:00 and 08:00, or as soon as possible after that |
+| Runs as | root (it runs `install.sh`), in a hardened systemd service | the same Windows account as the bot (at logon, or without logon when the bot starts at boot) |
+| Token stored in | `/etc/comicsbot/github-token` (root, mode 600) | `%LOCALAPPDATA%\ComicsBot\updater\github-token` (readable only by your account, like `.env`) |
+| Log | `journalctl -u comicsbot-update` | `%LOCALAPPDATA%\ComicsBot\updater\update.log` |
+
+Upgrading (manually, or by the updater) keeps the choice; uninstalling removes the timer or task, the updater and
+the token. On Linux the updater runs from a root-owned copy in `/usr/local/lib/comicsbot-updater`, so the bot's own
+user cannot change what root runs. A setup run as administrator with *start at boot* sets up the update task to run
+without a logon too; that needs administrator rights, also for `install.bat -EnableAutoUpdate` later.
+Unattended Windows setup: set `COMICSBOT_GITHUB_TOKEN` and add `autoupdate` to `/TASKS`.
+
+Automatic updates work from the first release that includes the updater; install that one by hand.
+
 ### Run from source
 
 Copy `.env.example` to `.env`, set `DISCORD_TOKEN`, then:
