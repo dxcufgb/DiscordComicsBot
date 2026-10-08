@@ -524,7 +524,7 @@ try {
         Invoke-Updater -Check
     } elseif ($UpdateNow) {
         Invoke-Updater
-    } elseif ($EnableAutoUpdate -and $InPlace -and (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue)) {
+    } elseif ($EnableAutoUpdate -and $InPlace -and -not $Yes -and (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue)) {
         # Run from the install folder: only turn automatic updates on, no reinstall.
         Enable-AutoUpdate
     } elseif ($Restart) {

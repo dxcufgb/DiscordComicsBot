@@ -225,7 +225,9 @@ write_update_token() {
 
 # Installs (or refreshes) the updater and its systemd units. Needs $PYTHON.
 install_updater() {
-    local updater="$INSTALL_DIR/comicsbot/updater.py"
+    # From the release being installed (root's extracted copy during automatic updates),
+    # not from the install folder, which the bot's account can write.
+    local updater="$SRC_DIR/comicsbot/updater.py"
     [ -f "$updater" ] || die "this ComicsBot version has no updater ($updater is missing)"
     install -d -m 755 -o root -g root "$UPDATER_DIR"
     install -m 644 -o root -g root "$updater" "$UPDATER_DIR/updater.py"

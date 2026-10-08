@@ -407,10 +407,12 @@ def backup_program_files(install_dir: Path, backup_dir: Path) -> None:
     backup_dir.mkdir(parents=True, exist_ok=True)
     for name in PROGRAM_FILES:
         source = install_dir / name
-        if source.is_dir() and not source.is_symlink():
+        if source.is_symlink():
+            continue  # never dereference a link the bot's account may have planted (root reads these)
+        if source.is_dir():
             shutil.copytree(source, backup_dir / name, symlinks=True)
         elif source.is_file():
-            shutil.copy2(source, backup_dir / name)
+            shutil.copy2(source, backup_dir / name, follow_symlinks=False)
 
 
 def _remove(path: Path) -> None:

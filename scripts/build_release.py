@@ -57,8 +57,9 @@ starts the bot as a service. Running a newer release's installer upgrades in pla
 `.env` and all bot data. Coming from a git checkout? Add `--migrate-from /path/to/checkout`
 (Linux) or `-MigrateFrom C:\\path\\to\\checkout` (Windows) to bring its settings and data along.
 
-The bot needs **Server Members Intent** turned on (Developer Portal → your application → Bot →
-Privileged Gateway Intents), or Discord refuses the login. Turn it on before upgrading from 2.2.0 or older.
+With `UPDATE_NOTIFY=admins` (the default) the bot needs **Server Members Intent** turned on (Developer Portal →
+your application → Bot → Privileged Gateway Intents), or Discord refuses the login. Turn it on before upgrading
+from 2.2.0 or older, or set `UPDATE_NOTIFY=owner` or `off` in `.env`.
 
 Verify downloads with `sha256sum -c SHA256SUMS`.
 """

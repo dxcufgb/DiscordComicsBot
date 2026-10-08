@@ -481,3 +481,19 @@ def test_release_checksums_cover_the_archives(release_files):
     for platform in ("linux", "windows"):
         name = updater.archive_name(__version__, platform)
         assert sums[name] == hashlib.sha256(release_files[name]).hexdigest()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="symlinks need extra rights on Windows")
+def test_backup_never_follows_symlinks_in_the_install_folder(tmp_path):
+    install, backup = tmp_path / "install", tmp_path / "backup"
+    install.mkdir()
+    secret = tmp_path / "secret"
+    secret.write_text("root only")
+    (install / "README.md").symlink_to(secret)
+    (install / "VERSION").write_text("1.0.0\n")
+    updater.backup_program_files(install, backup)
+    assert (backup / "VERSION").read_text() == "1.0.0\n"
+    assert not (backup / "README.md").exists()
+    updater.restore_program_files(install, backup)
+    assert not (install / "README.md").exists()
+    assert secret.read_text() == "root only"
