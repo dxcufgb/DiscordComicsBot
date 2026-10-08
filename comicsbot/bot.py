@@ -28,11 +28,11 @@ class ComicsBot(discord.Client):
         discord.VoiceClient.warn_nacl = False
         discord.VoiceClient.warn_dave = False
         # Slash commands need no message content. The privileged Server Members intent is used to
-        # find the members with the Administrator permission for update DMs; it must be enabled
-        # under Bot in the Developer Portal (ComicsBot.py explains that if the login fails).
+        # find the members with the Administrator permission for update DMs (UPDATE_NOTIFY=admins only);
+        # it must be enabled under Bot in the Developer Portal (ComicsBot.py explains that if the login fails).
         intents = discord.Intents.none()
         intents.guilds = True
-        intents.members = True
+        intents.members = config.update_notify == "admins"
         super().__init__(
             intents=intents,
             allowed_mentions=discord.AllowedMentions.none(),

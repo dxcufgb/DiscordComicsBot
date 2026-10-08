@@ -229,6 +229,12 @@ def test_on_ready_announces_an_upgrade_once(tmp_path, monkeypatch, caplog):
     assert State.load(tmp_path / "state.json").bot_version == announce.__version__
 
 
+def test_members_intent_only_for_admins(tmp_path, monkeypatch):
+    for mode, expected in (("admins", True), ("owner", False), ("off", False)):
+        bot, _, _ = make_bot(tmp_path, monkeypatch, update_notify=mode)
+        assert bot.intents.members is expected
+
+
 def test_on_ready_first_run_and_off(tmp_path, monkeypatch):
     bot, state, sent = make_bot(tmp_path, monkeypatch)
     run_ready(bot)

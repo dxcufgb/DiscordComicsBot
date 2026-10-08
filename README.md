@@ -7,7 +7,8 @@ A Discord bot that watches RSS/Atom feeds of web comics and posts new strips to 
 1. Create an application at <https://discord.com/developers/applications>. Under **Bot**, reset and copy the token.
    **Under Bot → Privileged Gateway Intents, turn on "Server Members Intent" and save.** The bot needs it to find
    the server admins it sends update notices to; without it Discord refuses the login and the bot stops with an
-   error in `discord.log` saying so (it is not restarted over and over).
+   error in `discord.log` saying so (it is not restarted over and over). It is not requested when `UPDATE_NOTIFY`
+   is `owner` or `off`.
 2. Invite the bot with this URL, replacing `CLIENT_ID` with your application ID:
    `https://discord.com/oauth2/authorize?client_id=CLIENT_ID&scope=bot+applications.commands&permissions=19456`
    (View Channel, Send Messages, Embed Links).
@@ -111,7 +112,7 @@ servers it applies to. The changes come from the GitHub release after an automat
 section is left out. After a manual upgrade only the bundled `RELEASE_NOTES.md` is available, which holds just the
 install steps, so the DM shows the version and a link to the release.
 Each version is announced once; a fresh install only records its version. Finding the Administrator members uses
-the **Server Members Intent**, which must be enabled in the Developer Portal (see Setup). Set in `.env`:
+the **Server Members Intent**, which must be enabled in the Developer Portal (see Setup); `owner` and `off` do not request it. Set in `.env`:
 
 | Setting | Default | Meaning |
 |---|---|---|
