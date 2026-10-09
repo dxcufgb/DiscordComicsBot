@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any
 import discord
 
 from . import __version__
-from .updater import UpdateError, is_newer, parse_version
+from .updater import UpdateError, data_folder, is_newer, parse_version
 
 if TYPE_CHECKING:
     from .storage import State
@@ -73,25 +73,16 @@ def load_release_notes(base_dir: Path, version: str = __version__, data_dir: Pat
     """Release notes for ``version``: the updater's notice (deleted once read), else the bundled file.
 
     The notice is in the data folder (``data_dir``, default ``base_dir``), the bundled notes next to the program.
+    The updater runs as root and never writes to a ``DATA_DIR`` chosen in the bot's ``.env``: it uses the install's
+    own data folder, so that folder is checked too.
     """
-    notice = (data_dir or base_dir) / UPDATE_NOTICE
+    folders = [data_dir or base_dir]
+    if data_folder(base_dir).resolve() != folders[0].resolve():
+        folders.append(data_folder(base_dir))
     notes = None
-    if notice.is_file():
-        try:
-            data = json.loads(notice.read_text(encoding="utf-8"))
-            if isinstance(data, dict) and _same_version(str(data.get("version", "")), version):
-                notes = ReleaseNotes(
-                    version=version,
-                    name=str(data.get("name") or ""),
-                    body=str(data.get("body") or ""),
-                    html_url=_github_url(data.get("html_url")),
-                )
-        except (OSError, ValueError):
-            log.warning("Could not read %s; ignoring it", notice.name)
-        try:
-            notice.unlink()
-        except OSError:
-            log.warning("Could not delete %s", notice.name)
+    for folder in folders:
+        found = _read_notice(folder / UPDATE_NOTICE, version)  # read every notice: each is deleted once read
+        notes = notes or found
     if notes is None:
         bundled = base_dir / BUNDLED_NOTES
         body = ""
@@ -101,6 +92,29 @@ def load_release_notes(base_dir: Path, version: str = __version__, data_dir: Pat
             except OSError:
                 log.warning("Could not read %s", bundled.name)
         notes = ReleaseNotes(version=version, body=body)
+    return notes
+
+
+def _read_notice(notice: Path, version: str) -> ReleaseNotes | None:
+    """The updater's notice for ``version`` (deleted once read, also when it is for another version), else None."""
+    if not notice.is_file():
+        return None
+    notes = None
+    try:
+        data = json.loads(notice.read_text(encoding="utf-8"))
+        if isinstance(data, dict) and _same_version(str(data.get("version", "")), version):
+            notes = ReleaseNotes(
+                version=version,
+                name=str(data.get("name") or ""),
+                body=str(data.get("body") or ""),
+                html_url=_github_url(data.get("html_url")),
+            )
+    except (OSError, ValueError):
+        log.warning("Could not read %s; ignoring it", notice.name)
+    try:
+        notice.unlink()
+    except OSError:
+        log.warning("Could not delete %s", notice.name)
     return notes
 
 
