@@ -286,10 +286,25 @@ def test_archive_without_installer_is_refused(tmp_path):
 # -- the whole update ------------------------------------------------------------------
 
 
+def is_status(command):
+    return "is-active" in command or "-Command" in command
+
+
+def is_restart(command):
+    return command[-2:] == ["restart", "comicsbot"] or command[-1] == "-Restart"
+
+
 class FakeRunner:
-    def __init__(self, install_dir, installer_code=0):
+    """Plays the release installer and the service manager.
+
+    ``running`` holds the answers to the successive "is the bot running?" checks (then: yes).
+    """
+
+    def __init__(self, install_dir, installer_code=0, running=(), restart_code=0):
         self.install_dir = install_dir
         self.installer_code = installer_code
+        self.running = list(running)
+        self.restart_code = restart_code
         self.commands = []
 
     def __call__(self, command, timeout):
@@ -301,7 +316,23 @@ class FakeRunner:
             (self.install_dir / "VERSION").write_bytes((release_dir / "VERSION").read_bytes())
             (self.install_dir / "start-bot.sh").write_text("new file\n")
             return self.installer_code
+        if is_status(command):
+            return 0 if (self.running.pop(0) if self.running else True) else 3
+        if is_restart(command):
+            return self.restart_code
         return 0
+
+
+def run_update(install, release_files, runner, tmp_path, platform="linux", sleeps=None):
+    return updater.update(
+        install,
+        TOKEN,
+        platform=platform,
+        fetch=FakeGitHub(f"v{__version__}", release_files),
+        runner=runner,
+        backup_root=tmp_path / "backups",
+        sleep=(sleeps.append if sleeps is not None else lambda seconds: None),
+    )
 
 
 def test_up_to_date_does_nothing(tmp_path, release_files, caplog):
@@ -332,9 +363,12 @@ def test_update_runs_the_release_installer(tmp_path, release_files, caplog, plat
     github = FakeGitHub(f"v{__version__}", release_files)
     runner = FakeRunner(install)
     caplog.set_level(logging.DEBUG)
-    assert updater.update(install, TOKEN, platform=platform, fetch=github, runner=runner) == 0
-    assert len(runner.commands) == 1
-    command = runner.commands[0]
+    assert (
+        updater.update(install, TOKEN, platform=platform, fetch=github, runner=runner, backup_root=tmp_path / "b") == 0
+    )
+    assert len(runner.commands) == 2
+    assert is_status(runner.commands[0])
+    command = runner.commands[1]
     if platform == "linux":
         assert command[-3:] == ["--dir", str(install), "--yes"]
         assert command[1].endswith(f"ComicsBot-{__version__}/install.sh")
@@ -353,6 +387,7 @@ def test_update_runs_the_release_installer(tmp_path, release_files, caplog, plat
     assert TOKEN not in (install / "update-notice.json").read_text()
     assert TOKEN not in caplog.text
     assert "X-Amz-Signature" not in caplog.text
+    assert list((tmp_path / "b").iterdir()) == []  # the backup is gone after a good update
 
 
 def test_checksum_mismatch_stops_before_installing(tmp_path, release_files):
@@ -380,29 +415,102 @@ def test_missing_checksum_entry_stops(tmp_path, release_files):
 def test_failed_install_is_rolled_back(tmp_path, release_files, caplog):
     install = make_install(tmp_path / "app")
     runner = FakeRunner(install, installer_code=1)
+    sleeps = []
     caplog.set_level(logging.INFO)
-    code = updater.update(
-        install, TOKEN, platform="linux", fetch=FakeGitHub(f"v{__version__}", release_files), runner=runner
-    )
-    assert code == 1
+    assert run_update(install, release_files, runner, tmp_path, sleeps=sleeps) == updater.EXIT_FAILED
     assert (install / "ComicsBot.py").read_text() == "old bot\n"
     assert (install / "VERSION").read_text() == "2.1.0\n"
     assert not (install / "start-bot.sh").exists()  # added by the failed update, removed again
     assert (install / ".env").read_text() == "DISCORD_TOKEN=discord-secret\n"
     assert (install / "state.json").exists()
     assert not (install / "update-notice.json").exists()
-    assert [c[1:] for c in runner.commands[1:]] == [["stop", "comicsbot"], ["restart", "comicsbot"]]
+    assert [c[1:] for c in runner.commands[2:]] == [
+        ["stop", "comicsbot"],
+        ["restart", "comicsbot"],
+        ["is-active", "--quiet", "comicsbot"],
+    ]
+    assert sleeps == [updater.ROLLBACK_WAIT]  # checked after a short wait
     assert "restored and restarted" in caplog.text
+    assert "ROLLBACK FAILED" not in caplog.text
+    assert list((tmp_path / "backups").iterdir()) == []
 
 
-def test_windows_rollback_uses_install_ps1(tmp_path, release_files):
+def test_rollback_does_not_start_a_bot_that_was_not_running(tmp_path, release_files, caplog):
+    install = make_install(tmp_path / "app")
+    runner = FakeRunner(install, installer_code=1, running=[False])
+    caplog.set_level(logging.INFO)
+    assert run_update(install, release_files, runner, tmp_path) == updater.EXIT_FAILED
+    assert [c[1:] for c in runner.commands[2:]] == [["stop", "comicsbot"]]
+    assert (install / "VERSION").read_text() == "2.1.0\n"
+    assert "was not running before the update" in caplog.text
+    assert list((tmp_path / "backups").iterdir()) == []
+
+
+def assert_rollback_failed(caplog, tmp_path, install):
+    (backup,) = (tmp_path / "backups").iterdir()  # kept for recovery by hand
+    assert (backup / "ComicsBot.py").read_text() == "old bot\n"
+    message = next(r.getMessage() for r in caplog.records if "ROLLBACK FAILED" in r.getMessage())
+    assert message.startswith("ROLLBACK FAILED: ")
+    assert str(backup) in message
+    assert f"sudo cp -a {backup}/. {install}/" in message
+    assert TOKEN not in caplog.text
+
+
+def test_rollback_that_does_not_come_back_up_keeps_the_backup(tmp_path, release_files, caplog):
+    install = make_install(tmp_path / "app")
+    runner = FakeRunner(install, installer_code=1, running=[True, False])
+    code = run_update(install, release_files, runner, tmp_path)
+    assert code == updater.EXIT_ROLLBACK_FAILED != 0
+    assert_rollback_failed(caplog, tmp_path, install)
+    assert "is not running 15 seconds after it was started" in caplog.text
+
+
+def test_rollback_that_cannot_restart_keeps_the_backup(tmp_path, release_files, caplog):
+    install = make_install(tmp_path / "app")
+    runner = FakeRunner(install, installer_code=1, restart_code=1)
+    assert run_update(install, release_files, runner, tmp_path) == updater.EXIT_ROLLBACK_FAILED
+    assert_rollback_failed(caplog, tmp_path, install)
+    assert "could not be started" in caplog.text
+    assert not any(is_status(c) for c in runner.commands[3:])
+
+
+def test_rollback_that_cannot_restore_keeps_the_backup(tmp_path, release_files, caplog, monkeypatch):
     install = make_install(tmp_path / "app")
     runner = FakeRunner(install, installer_code=1)
-    updater.update(
-        install, TOKEN, platform="windows", fetch=FakeGitHub(f"v{__version__}", release_files), runner=runner
-    )
-    assert [c[-1] for c in runner.commands[1:]] == ["-Stop", "-Restart"]
-    assert all(c[5] == str(install / "install.ps1") for c in runner.commands[1:])
+
+    def broken_restore(install_dir, backup_dir):
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(updater, "restore_program_files", broken_restore)
+    assert run_update(install, release_files, runner, tmp_path) == updater.EXIT_ROLLBACK_FAILED
+    assert_rollback_failed(caplog, tmp_path, install)
+    assert "could not be put back" in caplog.text
+    assert not any(is_restart(c) for c in runner.commands)
+
+
+def test_rollback_that_leaves_files_missing_keeps_the_backup(tmp_path, release_files, caplog, monkeypatch):
+    install = make_install(tmp_path / "app")
+    runner = FakeRunner(install, installer_code=1)
+    real_restore = updater.restore_program_files
+
+    def incomplete_restore(install_dir, backup_dir):
+        real_restore(install_dir, backup_dir)
+        (install_dir / "ComicsBot.py").unlink()
+
+    monkeypatch.setattr(updater, "restore_program_files", incomplete_restore)
+    assert run_update(install, release_files, runner, tmp_path) == updater.EXIT_ROLLBACK_FAILED
+    assert_rollback_failed(caplog, tmp_path, install)
+    assert "ComicsBot.py missing from" in caplog.text
+
+
+def test_windows_rollback_uses_install_ps1(tmp_path, release_files, caplog):
+    install = make_install(tmp_path / "app")
+    runner = FakeRunner(install, installer_code=1, running=[True, False])
+    assert run_update(install, release_files, runner, tmp_path, platform="windows") == updater.EXIT_ROLLBACK_FAILED
+    assert [c[-1] for c in runner.commands[2:4]] == ["-Stop", "-Restart"]
+    assert all(c[5] == str(install / "install.ps1") for c in runner.commands[2:4])
+    assert "Get-ScheduledTask -TaskName 'ComicsBot'" in runner.commands[4][-1]
+    assert "install.bat -Restart" in caplog.text
 
 
 def test_installer_gets_no_secrets(monkeypatch, tmp_path):

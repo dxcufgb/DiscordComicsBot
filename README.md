@@ -68,8 +68,12 @@ How it works: the updater (`comicsbot/updater.py`, Python standard library only)
 pre-releases are ignored) and does nothing unless its version is newer than the installed one. Otherwise it downloads
 this system's archive (`ComicsBot-X.Y.Z-linux.tar.gz` or `-windows.zip`) and checks it against the release's
 `SHA256SUMS`, extracts it into a new temporary folder and runs its installer. If the installer fails (for example the
-new version does not log in to Discord within 30-45 seconds), the previous program files are put back and the old
-version is restarted. Only one update runs at a time; downloads are HTTPS only, with timeouts and size limits.
+new version does not log in to Discord within 30-45 seconds), the previous program files are put back and, if the
+bot was running before, the old version is restarted and checked again 15 seconds later. If that rollback fails too
+(the files cannot be put back, or the old version does not start), the updater logs `ROLLBACK FAILED: ...` with the
+steps to recover by hand, keeps the backup of the previous version (`/var/backups/comicsbot-update/ComicsBot-<old
+version>-*` on Linux, `%LOCALAPPDATA%\ComicsBot\updater\backups\...` on Windows; the message names it) and exits
+with code 3. Only one update runs at a time; downloads are HTTPS only, with timeouts and size limits.
 
 **GitHub token.** The repository is private, so the updater needs a token that can read it:
 

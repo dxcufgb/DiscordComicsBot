@@ -6,7 +6,9 @@ Looks up the latest release of the private GitHub repository, and when it is new
 installed version downloads this platform's archive, checks it against the release's SHA256SUMS,
 extracts it into a fresh temporary folder and runs that release's installer in upgrade mode
 (the same thing a manual upgrade does), which keeps ``.env``, ``state.json`` and the logs. If the
-installer fails, the previous program files are put back and the bot is restarted.
+installer fails, the previous program files are put back and, if the bot was running, it is restarted and
+checked again after a short wait. If that rollback fails too, "ROLLBACK FAILED" is logged with the steps to
+recover by hand, the backup is kept (``--backup-dir``) and the exit code is 3.
 
 It is started by the ``comicsbot-update`` systemd timer (Linux, as root) or the
 ``ComicsBot-Update`` scheduled task (Windows, as the account that runs the bot); see the README.
@@ -28,6 +30,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.error
 import urllib.request
 import zipfile
@@ -53,6 +56,8 @@ MAX_CHECKSUMS_BYTES = 64 * 1024
 MAX_ARCHIVE_BYTES = 50 * 1024 * 1024
 MAX_EXTRACTED_BYTES = 100 * 1024 * 1024
 INSTALLER_TIMEOUT = 20 * 60  # seconds
+SERVICE_TIMEOUT = 5 * 60  # seconds, for stopping, restarting or querying the bot
+ROLLBACK_WAIT = 15  # seconds the restored bot gets to start before it is checked
 MAX_NOTES_CHARS = 100_000
 # Release notes for the bot, which DMs them to server admins after the update (comicsbot/announce.py).
 UPDATE_NOTICE = "update-notice.json"
@@ -78,6 +83,8 @@ SECRET_VARIABLES = ("DISCORD_TOKEN", "COMICSBOT_GITHUB_TOKEN", "GITHUB_TOKEN", "
 
 EXIT_OK = 0
 EXIT_FAILED = 1
+# The update failed and so did putting the previous version back: the bot needs a hand.
+EXIT_ROLLBACK_FAILED = 3
 EXIT_BUSY = 73
 
 log = logging.getLogger("comicsbot.updater")
@@ -441,6 +448,16 @@ def restore_program_files(install_dir: Path, backup_dir: Path) -> None:
                 os.chown(path, owner.st_uid, owner.st_gid, follow_symlinks=False)
 
 
+def missing_after_restore(install_dir: Path, backup_dir: Path) -> list[str]:
+    """Names of backed-up program files that are not back in the install folder."""
+    return [
+        name
+        for name in PROGRAM_FILES
+        if ((backup_dir / name).exists() or (backup_dir / name).is_symlink())
+        and not ((install_dir / name).exists() or (install_dir / name).is_symlink())
+    ]
+
+
 def write_update_notice(install_dir: Path, release: Release) -> Path:
     """Leave the release notes for the bot (no secrets), readable and deletable by its account."""
     path = install_dir / UPDATE_NOTICE
@@ -490,7 +507,13 @@ def installer_command(release_dir: Path, install_dir: Path, platform: str) -> li
 
 
 def service_command(install_dir: Path, platform: str, action: str) -> list[str]:
-    """Stop or restart the bot (``action`` is "stop" or "restart")."""
+    """Stop or restart the bot, or check that it runs (``action`` is "stop", "restart" or "status")."""
+    if action == "status":
+        if platform == "windows":
+            task = "(Get-ScheduledTask -TaskName 'ComicsBot' -ErrorAction Stop)"
+            check = f"if ({task}.State -eq 'Running') {{ exit 0 }}; exit 1"
+            return [_powershell(), "-NoProfile", "-NonInteractive", "-Command", check]
+        return [shutil.which("systemctl") or "/usr/bin/systemctl", "is-active", "--quiet", "comicsbot"]
     if platform == "windows":
         script = str(install_dir / "install.ps1")
         switch = "-Stop" if action == "stop" else "-Restart"
@@ -562,6 +585,8 @@ def update(
     check_only: bool = False,
     fetch: Fetch = urllib_fetch,
     runner: Runner = run_command,
+    backup_root: Path | None = None,
+    sleep: Callable[[float], object] = time.sleep,
 ) -> int:
     installed = installed_version(install_dir)
     release = latest_release(token, fetch)
@@ -596,30 +621,102 @@ def update(
         extracted = work / "extract"
         extracted.mkdir()
         release_dir = extract_release(archive, extracted, release.version, platform)
-        backup = work / "backup"
-        backup_program_files(install_dir, backup)
-
-        # Written before the installer starts the new version, which reads (and deletes) it on startup.
-        notice = write_update_notice(install_dir, release)
+        # Outside the temporary folder: it is kept when the rollback fails, for recovery by hand.
+        if backup_root is not None:
+            backup_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        backup = Path(tempfile.mkdtemp(prefix=f"ComicsBot-{installed}-", dir=backup_root))
+        try:
+            was_running = runner(service_command(install_dir, platform, "status"), SERVICE_TIMEOUT) == 0
+            backup_program_files(install_dir, backup)
+            # Written before the installer starts the new version, which reads (and deletes) it on startup.
+            notice = write_update_notice(install_dir, release)
+        except BaseException:
+            shutil.rmtree(backup, ignore_errors=True)
+            raise
         log.info("Installing ComicsBot %s into %s", release.version, install_dir)
         code = runner(installer_command(release_dir, install_dir, platform), INSTALLER_TIMEOUT)
         if code == 0:
+            shutil.rmtree(backup, ignore_errors=True)
             log.info("ComicsBot was updated from %s to %s", installed, release.version)
             return EXIT_OK
 
         log.error("The installer failed (exit code %s); restoring ComicsBot %s", code, installed)
         notice.unlink(missing_ok=True)
-        runner(service_command(install_dir, platform, "stop"), 5 * 60)
-        try:
-            restore_program_files(install_dir, backup)
-        except OSError:
-            log.exception("Could not restore the previous program files")
-            return EXIT_FAILED
-        if runner(service_command(install_dir, platform, "restart"), 5 * 60) != 0:
-            log.error("Could not restart the restored ComicsBot %s", installed)
-        else:
-            log.info("ComicsBot %s was restored and restarted", installed)
+        return roll_back(install_dir, backup, installed, platform, was_running, runner, sleep)
+
+
+def roll_back(
+    install_dir: Path,
+    backup: Path,
+    installed: str,
+    platform: str,
+    was_running: bool,
+    runner: Runner,
+    sleep: Callable[[float], object],
+) -> int:
+    """Put the previous version back and check that it worked; keep the backup if it did not."""
+    runner(service_command(install_dir, platform, "stop"), SERVICE_TIMEOUT)
+    try:
+        restore_program_files(install_dir, backup)
+    except OSError as exc:
+        log.exception("Could not restore the previous program files")
+        return rollback_failed(
+            f"the previous program files could not be put back ({exc})", install_dir, backup, installed, platform
+        )
+    missing = missing_after_restore(install_dir, backup)
+    if missing:
+        return rollback_failed(
+            f"{', '.join(missing)} missing from {install_dir} after the restore",
+            install_dir,
+            backup,
+            installed,
+            platform,
+        )
+    if not was_running:
+        shutil.rmtree(backup, ignore_errors=True)
+        log.info("ComicsBot %s was restored (it was not running before the update, so it was not started)", installed)
         return EXIT_FAILED
+    if runner(service_command(install_dir, platform, "restart"), SERVICE_TIMEOUT) != 0:
+        return rollback_failed(
+            f"the restored ComicsBot {installed} could not be started", install_dir, backup, installed, platform
+        )
+    sleep(ROLLBACK_WAIT)
+    if runner(service_command(install_dir, platform, "status"), SERVICE_TIMEOUT) != 0:
+        return rollback_failed(
+            f"the restored ComicsBot {installed} is not running {ROLLBACK_WAIT} seconds after it was started",
+            install_dir,
+            backup,
+            installed,
+            platform,
+        )
+    shutil.rmtree(backup, ignore_errors=True)
+    log.info("ComicsBot %s was restored and restarted", installed)
+    return EXIT_FAILED
+
+
+def rollback_failed(reason: str, install_dir: Path, backup: Path, installed: str, platform: str) -> int:
+    if platform == "windows":
+        steps = (
+            f"run install.bat -Stop in {install_dir}, copy everything in {backup} into {install_dir}, then run "
+            f"install.bat -Restart there and check {install_dir / 'discord.log'}; or install a release again with "
+            "its setup.exe or install.bat"
+        )
+    else:
+        steps = (
+            f"sudo cp -a {backup}/. {install_dir}/ && sudo systemctl restart comicsbot, then check "
+            "systemctl status comicsbot and journalctl -u comicsbot; or install a release again with its "
+            "sudo ./install.sh"
+        )
+    log.error(
+        "ROLLBACK FAILED: %s. ComicsBot %s may not be running. The previous program files are kept in %s "
+        "(not deleted). To recover by hand: %s. .env and the bot's data are not part of the backup and were left "
+        "where they are.",
+        reason,
+        installed,
+        backup,
+        steps,
+    )
+    return EXIT_ROLLBACK_FAILED
 
 
 @contextmanager
@@ -665,6 +762,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--token-file", type=Path, required=True, help="file with the GitHub token")
     parser.add_argument("--lock-file", type=Path, help="lock file (default: update.lock next to the token file)")
     parser.add_argument("--log-file", type=Path, help="also log to this file")
+    parser.add_argument(
+        "--backup-dir",
+        type=Path,
+        help="where the previous version is backed up during an update (default: backups next to the token file)",
+    )
     parser.add_argument("--check", action="store_true", help="only report whether an update is available")
     parser.add_argument("--platform", choices=["linux", "windows"], default=current_platform(), help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
@@ -675,7 +777,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         with update_lock(lock_file):
             token = read_token(args.token_file)
-            return update(install_dir, token, platform=args.platform, check_only=args.check)
+            backup_root = args.backup_dir or args.token_file.parent / "backups"
+            return update(install_dir, token, platform=args.platform, check_only=args.check, backup_root=backup_root)
     except UpdateBusy:
         log.warning("Another update is already running; not starting a second one")
         return EXIT_BUSY

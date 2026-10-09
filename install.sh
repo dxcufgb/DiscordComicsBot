@@ -40,6 +40,9 @@ UPDATER_DIR="/usr/local/lib/comicsbot-updater"
 UPDATER_CONF_DIR="/etc/comicsbot"
 UPDATE_TOKEN_FILE="$UPDATER_CONF_DIR/github-token"
 UPDATE_LOCK="/run/comicsbot-update.lock"
+# The previous version is backed up here during an update; a backup is only left behind when the rollback
+# of a failed update fails too (the updater then logs "ROLLBACK FAILED" with the path and what to do).
+UPDATE_BACKUPS="/var/backups/comicsbot-update"
 
 APP_FILES=(ComicsBot.py comicsbot requirements.txt start-bot.sh install.sh .env.example README.md VERSION RELEASE_NOTES.md)
 DATA_FILES=(.env state.json comics.json)
@@ -241,7 +244,7 @@ After=network-online.target
 [Service]
 Type=oneshot
 # Runs as root because it runs the release's install.sh, like a manual upgrade.
-ExecStart="$PYTHON" -I "$UPDATER_DIR/updater.py" --install-dir "$INSTALL_DIR" --token-file "$UPDATE_TOKEN_FILE" --lock-file "$UPDATE_LOCK"
+ExecStart="$PYTHON" -I "$UPDATER_DIR/updater.py" --install-dir "$INSTALL_DIR" --token-file "$UPDATE_TOKEN_FILE" --lock-file "$UPDATE_LOCK" --backup-dir "$UPDATE_BACKUPS"
 TimeoutStartSec=45min
 UMask=0022
 PrivateTmp=yes
@@ -296,6 +299,11 @@ remove_updater() {
     fi
     rm -rf "$UPDATER_DIR"
     rm -f "$UPDATE_TOKEN_FILE" "$UPDATE_LOCK"
+    if [ "$PURGE" -eq 1 ]; then
+        rm -rf "$UPDATE_BACKUPS"
+    else
+        rmdir "$UPDATE_BACKUPS" 2> /dev/null || true
+    fi
     rmdir "$UPDATER_CONF_DIR" 2> /dev/null || true
 }
 
@@ -318,7 +326,7 @@ do_check_update() {
     fi
     ensure_python > /dev/null
     "$PYTHON" -I "$UPDATER_DIR/updater.py" --install-dir "$INSTALL_DIR" --token-file "$UPDATE_TOKEN_FILE" \
-        --lock-file "$UPDATE_LOCK" --check
+        --lock-file "$UPDATE_LOCK" --backup-dir "$UPDATE_BACKUPS" --check
 }
 
 do_update_now() {
