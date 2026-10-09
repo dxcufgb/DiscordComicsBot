@@ -11,6 +11,7 @@ import pytest
 from comicsbot import announce
 from comicsbot.bot import ComicsBot
 from comicsbot.config import Config
+from comicsbot.feeds import new_session
 from comicsbot.storage import State
 
 # -- version detection ------------------------------------------------------------
@@ -294,7 +295,7 @@ def test_install_section_is_stripped():
     assert embed.description.startswith("[Release on GitHub](")
 
 
-def test_missing_members_intent_exits_with_a_config_error(tmp_path, monkeypatch, caplog):
+def load_main():
     import importlib.util
     from pathlib import Path
 
@@ -302,13 +303,80 @@ def test_missing_members_intent_exits_with_a_config_error(tmp_path, monkeypatch,
     spec = importlib.util.spec_from_file_location("comicsbot_main", root / "ComicsBot.py")
     main = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(main)
+    return main
 
-    def refuse(self, token, **kwargs):
-        raise discord.PrivilegedIntentsRequired(shard_id=None)
 
-    monkeypatch.setattr(ComicsBot, "run", refuse)
+def fake_discord(monkeypatch, refuse_members=True, refuse_always=False):
+    """Run the real Client.run/close path with login and the gateway faked: no network."""
+    clients = []
+
+    async def setup_hook(self):
+        self.session = new_session()
+
+    async def login(self, token):
+        clients.append(self)
+        await self.setup_hook()
+
+    async def connect(self, *, reconnect=True):
+        if refuse_always or (refuse_members and self.intents.members):
+            raise discord.PrivilegedIntentsRequired(shard_id=None)
+
+    monkeypatch.setattr(ComicsBot, "setup_hook", setup_hook)
+    monkeypatch.setattr(discord.Client, "login", login)
+    monkeypatch.setattr(discord.Client, "connect", connect)
+    return clients
+
+
+def test_refused_members_intent_falls_back_to_owner(tmp_path, monkeypatch, caplog):
+    main = load_main()
+    clients = fake_discord(monkeypatch)
+    caplog.set_level(logging.INFO)
     config = Config(token="secret-token", base_dir=tmp_path)
-    code = main.run_bot(config, logging.getLogger("comicsbot"))
-    assert code == main.EXIT_CONFIG_ERROR == 78
+    assert main.run_bot(config, logging.getLogger("comicsbot")) == 0
+    first, second = clients
+    assert first.intents.members and first.config.update_notify == "admins"
+    assert first.is_closed() and first.session.closed  # closed cleanly before the second start
+    assert not second.intents.members and second.config.update_notify == "owner"
+    assert second.state is first.state
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 1 and "UPDATE_NOTIFY=owner" in warnings[0].getMessage()
     assert "Server Members Intent" in caplog.text
+    assert not [r for r in caplog.records if r.levelno >= logging.ERROR]
     assert "Traceback" not in caplog.text and "secret-token" not in caplog.text
+
+
+def test_owner_mode_never_requests_the_intent(tmp_path, monkeypatch, caplog):
+    main = load_main()
+    clients = fake_discord(monkeypatch)
+    config = Config(token="x", base_dir=tmp_path, update_notify="owner")
+    assert main.run_bot(config, logging.getLogger("comicsbot")) == 0
+    assert len(clients) == 1
+    assert "Server Members" not in caplog.text
+
+
+def test_failed_fallback_is_a_fatal_error(tmp_path, monkeypatch, caplog):
+    main = load_main()
+    clients = fake_discord(monkeypatch, refuse_always=True)
+    config = Config(token="secret-token", base_dir=tmp_path)
+    assert main.run_bot(config, logging.getLogger("comicsbot")) == 1
+    assert len(clients) == 2
+    assert all(c.is_closed() and c.session.closed for c in clients)
+    assert "ComicsBot stopped because of an unexpected error" in caplog.text
+    assert "secret-token" not in caplog.text
+
+
+def test_fallback_keeps_other_errors(tmp_path, monkeypatch, caplog):
+    main = load_main()
+    calls = []
+
+    def run(self, token, **kwargs):
+        calls.append(self.config.update_notify)
+        if len(calls) == 1:
+            raise discord.PrivilegedIntentsRequired(shard_id=None)
+        raise discord.LoginFailure("bad")
+
+    monkeypatch.setattr(ComicsBot, "run", run)
+    config = Config(token="secret-token", base_dir=tmp_path)
+    assert main.run_bot(config, logging.getLogger("comicsbot")) == main.EXIT_CONFIG_ERROR == 78
+    assert calls == ["admins", "owner"]
+    assert "Discord rejected the token" in caplog.text

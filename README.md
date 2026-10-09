@@ -5,10 +5,10 @@ A Discord bot that watches RSS/Atom feeds of web comics and posts new strips to 
 ## Setup
 
 1. Create an application at <https://discord.com/developers/applications>. Under **Bot**, reset and copy the token.
-   **Under Bot → Privileged Gateway Intents, turn on "Server Members Intent" and save.** The bot needs it to find
-   the server admins it sends update notices to; without it Discord refuses the login and the bot stops with an
-   error in `discord.log` saying so (it is not restarted over and over). It is not requested when `UPDATE_NOTIFY`
-   is `owner` or `off`.
+   Under Bot → Privileged Gateway Intents, also turn on **"Server Members Intent"** and save. The bot uses it to find
+   the server admins it sends update notices to. Without it the bot still runs: Discord refuses the intent, the bot
+   logs one warning and starts again without it, and update notices then go to server owners only. It is not
+   requested when `UPDATE_NOTIFY` is `owner` or `off` (set `owner` to silence the warning).
 2. Invite the bot with this URL, replacing `CLIENT_ID` with your application ID:
    `https://discord.com/oauth2/authorize?client_id=CLIENT_ID&scope=bot+applications.commands&permissions=19456`
    (View Channel, Send Messages, Embed Links).
@@ -54,8 +54,9 @@ same way (`install.bat -AtStartup` as administrator to start at boot) and is man
 | Uninstall (keeps `.env` and data) | `--uninstall` | `-Uninstall` |
 | Uninstall everything | `--uninstall --purge` | `-Uninstall -Purge` |
 
-Upgrades keep `.env`, `state.json` and the log. **Upgrading from 2.2.0 or older:** first turn on
-"Server Members Intent" for the bot in the Developer Portal (see Setup), or the new version cannot log in.
+Upgrades keep `.env` and the data (`state.json`, the log). When upgrading from 2.2.0 or older, turn on
+"Server Members Intent" for the bot in the Developer Portal (see Setup) so update notices reach all server admins;
+without it they go to the server owners only.
 
 ### Automatic updates
 
@@ -112,7 +113,9 @@ servers it applies to. The changes come from the GitHub release after an automat
 section is left out. After a manual upgrade only the bundled `RELEASE_NOTES.md` is available, which holds just the
 install steps, so the DM shows the version and a link to the release.
 Each version is announced once; a fresh install only records its version. Finding the Administrator members uses
-the **Server Members Intent**, which must be enabled in the Developer Portal (see Setup); `owner` and `off` do not request it. Set in `.env`:
+the **Server Members Intent**, which must be enabled in the Developer Portal (see Setup). If it is not, Discord
+refuses it; the bot then logs a warning (`Discord refused the Server Members intent ...`), starts again without it
+and sends the notices to the server owners only, as with `owner`. `owner` and `off` do not request it. Set in `.env`:
 
 | Setting | Default | Meaning |
 |---|---|---|

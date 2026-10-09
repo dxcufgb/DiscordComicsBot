@@ -114,7 +114,7 @@ begin
     'Reset Token, then paste the token here. It is stored in %LOCALAPPDATA%\ComicsBot\.env, ' +
     'readable only by your Windows account.' + #13#10#13#10 +
     'On the same Bot page, turn on "Server Members Intent" under Privileged Gateway Intents and save. ' +
-    'Without it Discord refuses the login.');
+    'Without it update notices go to server owners only, not to all server admins.');
   TokenPage.Add('Bot token:', True);
   GitHubTokenPage := CreateInputQueryPage(TokenPage.ID, 'GitHub token for automatic updates',
     'New releases are downloaded from the private GitHub repository dxcufgb/DiscordComicsBot.',

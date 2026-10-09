@@ -386,7 +386,7 @@ do_install() {
         if [ -z "$TOKEN" ] && [ -t 0 ]; then
             echo "Paste the bot token from https://discord.com/developers/applications (Bot -> Reset Token)."
             echo "On that Bot page, also turn on \"Server Members Intent\" (Privileged Gateway Intents) and save;"
-            echo "without it Discord refuses the login."
+            echo "without it update notices go to server owners only, not to all server admins."
             read -r -s -p "Discord bot token: " TOKEN
             echo
         fi
