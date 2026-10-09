@@ -96,7 +96,9 @@ class ComicsBot(discord.Client):
         if previous is None:
             return
         log.info("ComicsBot was updated from %s to %s", previous, self.state.bot_version)
-        notes = await asyncio.to_thread(announce.load_release_notes, self.config.base_dir, self.state.bot_version)
+        notes = await asyncio.to_thread(
+            announce.load_release_notes, self.config.base_dir, self.state.bot_version, self.config.data_dir
+        )
         mode = self.config.update_notify
         if mode == "off":
             return

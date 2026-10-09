@@ -19,6 +19,10 @@ EXIT_CONFIG_ERROR = 78
 
 DEFAULT_INTERVAL = 3600
 MIN_INTERVAL = 60
+# Folder for everything the bot writes, inside the program folder. The Linux installer creates it (owned by
+# the bot's account, while the program folder belongs to root); without it the bot writes next to its program
+# files, as before 2.3 (Windows installs and runs from source).
+DATA_DIR_NAME = "data"
 
 # Versions before 2.0 rewrote .env as "KEY:valueKEY:value" on one line, which
 # python-dotenv cannot parse. This pattern recovers the values from such a file.
@@ -46,14 +50,31 @@ class Config:
     update_notify: str = "admins"
     # COMICS-CHANNEL-<guild id> values from a pre-2.0 .env, used once to migrate.
     legacy_channels: dict[int, int] = field(default_factory=dict)
+    # Where the bot writes state.json, discord.log, bot.lock and reads update-notice.json
+    # (None: see default_data_dir).
+    data_dir: Path | None = None
+
+    def __post_init__(self) -> None:
+        if self.data_dir is None:
+            object.__setattr__(self, "data_dir", default_data_dir(self.base_dir))
 
     @property
     def state_file(self) -> Path:
-        return self.base_dir / "state.json"
+        return self.data_dir / "state.json"
 
     @property
     def log_file(self) -> Path:
-        return self.base_dir / "discord.log"
+        return self.data_dir / "discord.log"
+
+    @property
+    def lock_file(self) -> Path:
+        return self.data_dir / "bot.lock"
+
+
+def default_data_dir(base_dir: Path) -> Path:
+    """``<base_dir>/data`` when that folder exists (Linux installs), else ``base_dir`` itself."""
+    data_dir = base_dir / DATA_DIR_NAME
+    return data_dir if data_dir.is_dir() else base_dir
 
 
 def parse_legacy_env(text: str) -> dict[str, str]:
@@ -116,6 +137,9 @@ def load_config(base_dir: Path) -> Config:
     if update_notify not in ("admins", "owner", "off"):
         raise ConfigError(f"UPDATE_NOTIFY must be admins, owner or off, got {update_notify!r}")
 
+    raw_data_dir = (env.get("DATA_DIR") or "").strip()
+    data_dir = base_dir / Path(raw_data_dir).expanduser() if raw_data_dir else default_data_dir(base_dir)
+
     legacy_channels = {}
     for key, value in env.items():
         if key.startswith("COMICS-CHANNEL-") and value and value.strip().isdigit():
@@ -133,4 +157,5 @@ def load_config(base_dir: Path) -> Config:
         allow_private_feed_urls=_bool(env.get("ALLOW_PRIVATE_FEED_URLS"), False),
         update_notify=update_notify,
         legacy_channels=legacy_channels,
+        data_dir=data_dir,
     )

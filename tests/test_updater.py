@@ -2,6 +2,7 @@ import hashlib
 import io
 import json
 import logging
+import os
 import sys
 import tarfile
 import zipfile
@@ -70,6 +71,12 @@ class FakeGitHub:
         if url in self.cdn:
             return FakeResponse(200, self.files[self.cdn[url]])
         return FakeResponse(404)
+
+
+@pytest.fixture(autouse=True)
+def not_root(monkeypatch):
+    """The root-only checks are tested on their own; the other tests run as any user (CI: not root)."""
+    monkeypatch.setattr(updater, "_running_as_root", lambda: False)
 
 
 @pytest.fixture(scope="module")
@@ -310,7 +317,7 @@ class FakeRunner:
     def __call__(self, command, timeout):
         self.commands.append(command)
         if command[-1] in ("--yes", "-Unattended"):  # the release installer
-            release_dir = Path(command[1] if command[-1] == "--yes" else command[5]).parent
+            release_dir = Path(next(c for c in command if c.endswith(("install.sh", "install.ps1")))).parent
             # Like the real installer: copy the program files and leave .env and data alone.
             (self.install_dir / "ComicsBot.py").write_bytes((release_dir / "ComicsBot.py").read_bytes())
             (self.install_dir / "VERSION").write_bytes((release_dir / "VERSION").read_bytes())
@@ -371,7 +378,8 @@ def test_update_runs_the_release_installer(tmp_path, release_files, caplog, plat
     command = runner.commands[1]
     if platform == "linux":
         assert command[-3:] == ["--dir", str(install), "--yes"]
-        assert command[1].endswith(f"ComicsBot-{__version__}/install.sh")
+        assert command[1] == f"PYTHON={sys.executable}"  # the Python check_root_safety checked
+        assert command[3].endswith(f"ComicsBot-{__version__}/install.sh")
     else:
         assert command[-4:] == ["-InstallDir", str(install), "-Yes", "-Unattended"]
         assert command[5].endswith("install.ps1")
@@ -478,7 +486,7 @@ def test_rollback_that_cannot_restore_keeps_the_backup(tmp_path, release_files, 
     install = make_install(tmp_path / "app")
     runner = FakeRunner(install, installer_code=1)
 
-    def broken_restore(install_dir, backup_dir):
+    def broken_restore(install_dir, backup_dir, names):
         raise PermissionError(13, "Permission denied")
 
     monkeypatch.setattr(updater, "restore_program_files", broken_restore)
@@ -493,8 +501,8 @@ def test_rollback_that_leaves_files_missing_keeps_the_backup(tmp_path, release_f
     runner = FakeRunner(install, installer_code=1)
     real_restore = updater.restore_program_files
 
-    def incomplete_restore(install_dir, backup_dir):
-        real_restore(install_dir, backup_dir)
+    def incomplete_restore(install_dir, backup_dir, names):
+        real_restore(install_dir, backup_dir, names)
         (install_dir / "ComicsBot.py").unlink()
 
     monkeypatch.setattr(updater, "restore_program_files", incomplete_restore)
@@ -605,3 +613,169 @@ def test_backup_never_follows_symlinks_in_the_install_folder(tmp_path):
     updater.restore_program_files(install, backup)
     assert not (install / "README.md").exists()
     assert secret.read_text() == "root only"
+
+
+def test_update_notice_goes_into_the_data_folder(tmp_path, release_files):
+    install = make_install(tmp_path / "app")
+    (install / "data").mkdir()
+    runner = FakeRunner(install)
+    assert run_update(install, release_files, runner, tmp_path) == 0
+    assert json.loads((install / "data" / "update-notice.json").read_text())["version"] == __version__
+    assert not (install / "update-notice.json").exists()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="symlinks need extra rights on Windows")
+def test_data_folder_link_is_not_used(tmp_path):
+    install = make_install(tmp_path / "app")
+    (tmp_path / "elsewhere").mkdir()
+    (install / "data").symlink_to(tmp_path / "elsewhere")
+    assert updater.data_folder(install) == install
+
+
+def test_linux_rollback_covers_the_virtual_environment(tmp_path, release_files):
+    install = make_install(tmp_path / "app")
+    (install / ".venv" / "bin").mkdir(parents=True)
+    (install / ".venv" / "bin" / "python").write_text("old venv\n")
+    (install / "data").mkdir()
+    (install / "data" / "state.json").write_text("data\n")
+
+    class BreakingRunner(FakeRunner):
+        def __call__(self, command, timeout):
+            if command[-1] == "--yes":  # the failing installer has already replaced the venv
+                (self.install_dir / ".venv" / "bin" / "python").write_text("half-upgraded\n")
+            return super().__call__(command, timeout)
+
+    runner = BreakingRunner(install, installer_code=1)
+    assert run_update(install, release_files, runner, tmp_path) == updater.EXIT_FAILED
+    assert (install / ".venv" / "bin" / "python").read_text() == "old venv\n"
+    assert (install / "data" / "state.json").read_text() == "data\n"
+    assert ".venv" not in updater.program_files("windows")  # the updater runs from it there
+
+
+# -- running as root on Linux ---------------------------------------------------------------
+
+
+def make_root_only(tmp_path):
+    """An install that is safe when "root" is the current user (the tests do not run as root)."""
+    install = make_install(tmp_path / "app")
+    (install / "data").mkdir()
+    (install / "data" / "state.json").write_text("{}")
+    (install / ".venv" / "bin").mkdir(parents=True)
+    python = tmp_path / "usr" / "bin" / "python3"
+    python.parent.mkdir(parents=True)
+    python.write_text("")
+    (install / ".venv" / "bin" / "python").symlink_to(python)
+    for path in [tmp_path, *tmp_path.rglob("*")]:
+        if not path.is_symlink():
+            path.chmod(0o755 if path.is_dir() else 0o644)
+    # The bot's data folder and .env may be writable by the bot.
+    (install / "data").chmod(0o777)
+    (install / "data" / "state.json").chmod(0o666)
+    (install / ".env").chmod(0o666)
+    return install, python
+
+
+def unsafe(tmp_path, install, executables=()):
+    return updater.unsafe_path(install, executables, uid=os.getuid(), gid=os.getgid(), top=tmp_path)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX permissions")
+def test_root_only_install_is_accepted(tmp_path):
+    install, python = make_root_only(tmp_path)
+    assert unsafe(tmp_path, install, [python, install / ".venv" / "bin" / "python"]) is None
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX permissions")
+@pytest.mark.parametrize(
+    "target", ["ComicsBot.py", "comicsbot", "comicsbot/__init__.py", ".venv/bin", ".", "..", "VERSION"]
+)
+def test_install_writable_by_others_is_refused(tmp_path, target):
+    install, _ = make_root_only(tmp_path)
+    path = install / target
+    path.chmod(path.stat().st_mode | 0o002)
+    assert unsafe(tmp_path, install) == path.resolve()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX permissions")
+def test_group_writable_is_refused_unless_the_group_is_root(tmp_path):
+    install, _ = make_root_only(tmp_path)
+    (install / "ComicsBot.py").chmod(0o664)
+    other_group = (install / "ComicsBot.py").stat().st_gid + 1
+    assert updater.unsafe_path(install, uid=os.getuid(), gid=other_group, top=tmp_path) == install / "ComicsBot.py"
+    # gid=<our group> plays "the group is root": group-writable by root's group is fine.
+    assert (
+        updater.unsafe_path(install, uid=os.getuid(), gid=(install / "ComicsBot.py").stat().st_gid, top=tmp_path)
+        is None
+    )
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX permissions")
+def test_file_owned_by_another_account_is_refused(tmp_path):
+    install, _ = make_root_only(tmp_path)
+    # Pretend root is some other uid: then everything here belongs to "another account".
+    assert updater.unsafe_path(install, uid=os.getuid() + 1, top=tmp_path) is not None
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="symlinks need extra rights on Windows")
+def test_install_folder_is_checked_through_links(tmp_path):
+    install, _ = make_root_only(tmp_path)
+    shared = tmp_path / "shared"
+    shared.mkdir()
+    shared.chmod(0o777)
+    real = shared / "app"
+    install.rename(real)
+    install.symlink_to(real)
+    assert unsafe(tmp_path, install) == shared
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX permissions")
+def test_writable_python_is_refused(tmp_path):
+    install, python = make_root_only(tmp_path)
+    python.parent.chmod(0o777)
+    assert unsafe(tmp_path, install, [python]) == python.parent
+    # Through the venv's link as well.
+    assert unsafe(tmp_path, install, [install / ".venv" / "bin" / "python"]) == python.parent
+    python.parent.chmod(0o755)
+    other = tmp_path / "home" / "bin"
+    other.mkdir(parents=True)
+    other.chmod(0o777)
+    (other / "python3").symlink_to(python)
+    assert unsafe(tmp_path, install, [other / "python3"]) == other  # the link could be pointed elsewhere
+
+
+def test_main_refuses_an_unsafe_install_as_root(tmp_path, monkeypatch, caplog):
+    install = make_install(tmp_path / "app")
+    token_file = tmp_path / "token"
+    token_file.write_text(TOKEN)
+    monkeypatch.setattr(updater, "_running_as_root", lambda: True)
+    monkeypatch.setattr(updater, "update", lambda *a, **k: pytest.fail("must not update"))
+    args = ["--install-dir", str(install), "--token-file", str(token_file), "--platform", "linux"]
+    if os.name == "posix" and os.geteuid() != 0:
+        # Not root: everything here belongs to "another account".
+        assert updater.main(args) == updater.EXIT_FAILED
+    else:
+        monkeypatch.setattr(updater, "unsafe_path", lambda *a, **k: install / "ComicsBot.py")
+        assert updater.main(args) == updater.EXIT_FAILED
+    assert "can be changed by an account other than root" in caplog.text
+    assert "refusing to update" in caplog.text
+    assert TOKEN not in caplog.text
+
+
+def test_main_checks_the_install_and_pythons_as_root(tmp_path, monkeypatch):
+    install = make_install(tmp_path / "app")
+    token_file = tmp_path / "token"
+    token_file.write_text(TOKEN)
+    seen = []
+    monkeypatch.setattr(updater, "_running_as_root", lambda: True)
+    monkeypatch.setattr(updater, "unsafe_path", lambda path, executables: seen.append((path, list(executables))))
+    monkeypatch.setattr(updater, "update", lambda *a, **k: 0)
+    assert updater.main(["--install-dir", str(install), "--token-file", str(token_file), "--platform", "linux"]) == 0
+    assert seen == [
+        (
+            install.resolve(),
+            [Path(sys.executable), Path(updater.__file__), install.resolve() / ".venv" / "bin" / "python"],
+        )
+    ]
+    seen.clear()
+    assert updater.main(["--install-dir", str(install), "--token-file", str(token_file), "--platform", "windows"]) == 0
+    assert seen == []

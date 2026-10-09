@@ -21,7 +21,7 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-UPDATE_NOTICE = "update-notice.json"  # written by the updater next to state.json
+UPDATE_NOTICE = "update-notice.json"  # written by the updater into the data folder, next to state.json
 BUNDLED_NOTES = "RELEASE_NOTES.md"  # shipped in the release archives
 RELEASES_URL = "https://github.com/dxcufgb/DiscordComicsBot/releases"
 NOTIFY_MODES = ("admins", "owner", "off")
@@ -69,9 +69,12 @@ def detect_update(state: State, running: str = __version__) -> str | None:
     return recorded
 
 
-def load_release_notes(base_dir: Path, version: str = __version__) -> ReleaseNotes:
-    """Release notes for ``version``: the updater's notice (deleted once read), else the bundled file."""
-    notice = base_dir / UPDATE_NOTICE
+def load_release_notes(base_dir: Path, version: str = __version__, data_dir: Path | None = None) -> ReleaseNotes:
+    """Release notes for ``version``: the updater's notice (deleted once read), else the bundled file.
+
+    The notice is in the data folder (``data_dir``, default ``base_dir``), the bundled notes next to the program.
+    """
+    notice = (data_dir or base_dir) / UPDATE_NOTICE
     notes = None
     if notice.is_file():
         try:

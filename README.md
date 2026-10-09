@@ -32,7 +32,31 @@ The bot is installed in `/opt/comicsbot` and runs as the system user `comicsbot`
 Distributions older than Debian 12 / Ubuntu 22.04 ship a Python older than 3.10; upgrade the system, or install a
 newer Python yourself and run `sudo PYTHON=/path/to/python3.x ./install.sh`.
 Manage it with `systemctl status|restart|stop comicsbot`; logs are in `journalctl -u comicsbot` and
-`/opt/comicsbot/discord.log`.
+`/opt/comicsbot/data/discord.log`.
+
+**Linux layout.** Root runs the program files (when installing, and the automatic updater), so the bot's own account
+must not be able to change them:
+
+| Path | Owner, mode | What |
+|---|---|---|
+| `/opt/comicsbot/` | `root:root 755` | Program files: `ComicsBot.py`, `comicsbot/`, `start-bot.sh`, `install.sh`, `requirements.txt`, `README.md`, `VERSION`, `RELEASE_NOTES.md`, `.env.example` (all root's, not writable by group or others) |
+| `/opt/comicsbot/.venv/` | `root:root` | The virtual environment, built by the installer as root; the bot only runs it |
+| `/opt/comicsbot/.env` | `comicsbot:comicsbot 600` | Settings and the bot token |
+| `/opt/comicsbot/data/` | `comicsbot:comicsbot 750` | Everything the bot writes: `state.json`, `discord.log` (+ rotations), `bot.lock`, `update-notice.json`, temporary files of atomic writes |
+
+The bot uses `<program folder>/data` when that folder exists, and otherwise writes next to its program files (as
+before 2.3; this is what Windows installs and runs from source do). Set `DATA_DIR` in `.env` to use another folder
+(relative paths are relative to the program folder); the Linux installer and updater always use `data/`.
+
+**Upgrading an install from before 2.3** (where the `comicsbot` account owned the whole folder) switches to this
+layout: the installer gives the folder and the program files to root, moves everything else that the bot kept in the
+folder (`state.json`, `discord.log*`, `bot.lock`, `update-notice.json`, `.state-*.tmp`, old `comics.json` /
+`*-Comics.json`, any other file that is not a program file, `.env` or `.venv`) into `data/` with its owner and
+mode unchanged (a name that is already taken in `data/` gets `.old`, `.old2`, ... appended), deletes the bot
+account's pip cache (`.cache`) and rebuilds `.venv` as root. Running the installer again does nothing more. The
+automatic updater runs the new release's `install.sh`, so automatic updates migrate the same way; if such an update
+fails, the old updater puts the old program files back but not the old layout, so install the new release by hand
+(`sudo ./install.sh`) in that case.
 
 **Windows**: run `ComicsBot-X.Y.Z-setup.exe`. The wizard asks for the bot token and installs everything. Run it as
 administrator to get the option to start the bot when Windows starts, even if nobody logs in. The Start menu gets
@@ -102,8 +126,13 @@ download is a redirect to GitHub's storage, which is fetched without it). It nev
 | Log | `journalctl -u comicsbot-update` | `%LOCALAPPDATA%\ComicsBot\updater\update.log` |
 
 Upgrading (manually, or by the updater) keeps the choice; uninstalling removes the timer or task, the updater and
-the token. On Linux the updater runs from a root-owned copy in `/usr/local/lib/comicsbot-updater`, so the bot's own
-user cannot change what root runs. A setup run as administrator with *start at boot* sets up the update task to run
+the token. On Linux the updater runs from a root-owned copy in `/usr/local/lib/comicsbot-updater`, runs the new
+release's `install.sh` from its own extracted copy and writes `update-notice.json` into `data/`. Because it runs as
+root, turning automatic updates on (and every updater run) refuses an install folder (resolved through links),
+program file, `.venv` file or parent folder that an account other than root could change, and a Python interpreter
+(the given path, the file it leads to, or their folders) that one could change: install into a folder only root can
+write, such as the default `/opt/comicsbot`, with a system-wide Python. The updater also backs up and restores `.venv`
+on Linux. A setup run as administrator with *start at boot* sets up the update task to run
 without a logon too; that needs administrator rights, also for `install.bat -EnableAutoUpdate` later.
 Unattended Windows setup: set `COMICSBOT_GITHUB_TOKEN` and add `autoupdate` to `/TASKS`.
 

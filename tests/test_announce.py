@@ -82,6 +82,17 @@ def test_stale_notice_falls_back_to_bundled_notes(tmp_path):
     assert not (tmp_path / announce.UPDATE_NOTICE).exists()
 
 
+def test_notice_is_read_from_the_data_folder(tmp_path):
+    data = tmp_path / "data"
+    data.mkdir()
+    (tmp_path / announce.BUNDLED_NOTES).write_text("## Install\nbundled")
+    write_notice(data, "2.3.0")
+    notes = announce.load_release_notes(tmp_path, "2.3.0", data)
+    assert notes.body.startswith("## What's Changed")
+    assert not (data / announce.UPDATE_NOTICE).exists()
+    assert announce.load_release_notes(tmp_path, "2.3.0", data).body == "## Install\nbundled"
+
+
 def test_notice_link_must_point_at_github(tmp_path):
     write_notice(tmp_path, "2.3.0", html_url="https://evil.example/")
     assert announce.load_release_notes(tmp_path, "2.3.0").url.startswith(announce.RELEASES_URL)

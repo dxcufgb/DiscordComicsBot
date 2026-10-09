@@ -27,6 +27,18 @@ def test_install_sh_never_takes_the_github_token_as_an_option():
     assert 'chmod 600 "$tmp"' in INSTALL_SH
 
 
+def test_install_sh_keeps_program_files_root_only():
+    body = INSTALL_SH[INSTALL_SH.index("do_install() {") :]
+    assert body.index("migrate_layout") < body.index('info "Copying program files')
+    assert 'chown -R root:root "$INSTALL_DIR/$item"' in body
+    assert 'chown "$SERVICE_USER:$SERVICE_USER" "$env_file"' in body and 'chmod 600 "$env_file"' in body
+    # Root never runs what the bot's account could have changed: .venv is rebuilt unless root's alone.
+    assert body.index("venv_untrusted") < body.index('"$INSTALL_DIR/start-bot.sh" setup')
+    assert "run_as_service_user env PYTHON" not in INSTALL_SH
+    updater = INSTALL_SH[INSTALL_SH.index("install_updater() {") :]
+    assert updater.splitlines()[1].strip() == "require_root_only"
+
+
 def test_install_sh_removes_the_updater_on_uninstall():
     body = INSTALL_SH[INSTALL_SH.index("do_uninstall() {") :]
     assert body.splitlines()[1].strip() == "remove_updater"
@@ -68,4 +80,4 @@ def test_updater_is_shipped_in_both_archives():
 
 @pytest.mark.skipif(not shutil.which("shellcheck"), reason="shellcheck is not installed")
 def test_shellcheck():
-    subprocess.run(["shellcheck", "install.sh", "start-bot.sh"], cwd=ROOT, check=True)
+    subprocess.run(["shellcheck", "install.sh", "start-bot.sh", ".github/check-linux-layout.sh"], cwd=ROOT, check=True)

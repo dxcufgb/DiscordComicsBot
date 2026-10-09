@@ -27,6 +27,7 @@ import logging
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -34,7 +35,7 @@ import time
 import urllib.error
 import urllib.request
 import zipfile
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from logging.handlers import RotatingFileHandler
@@ -61,9 +62,13 @@ ROLLBACK_WAIT = 15  # seconds the restored bot gets to start before it is checke
 MAX_NOTES_CHARS = 100_000
 # Release notes for the bot, which DMs them to server admins after the update (comicsbot/announce.py).
 UPDATE_NOTICE = "update-notice.json"
+# The bot's data folder inside the install folder (owned by the bot's account on Linux, where the program
+# files belong to root); without it (Windows) the bot's data is in the install folder itself.
+DATA_DIR_NAME = "data"
 
 # Program files a release installs. They are backed up before an update and put back if it fails;
-# everything else in the install folder (.env, state.json, logs, .venv) is left to the installer.
+# everything else in the install folder (.env, the data, logs) is left to the installer. On Linux the
+# virtual environment is root's too (the installer builds it) and is backed up as well.
 PROGRAM_FILES = (
     "ComicsBot.py",
     "comicsbot",
@@ -78,6 +83,7 @@ PROGRAM_FILES = (
     "install.bat",
     "RELEASE_NOTES.md",
 )
+LINUX_PROGRAM_FILES = (*PROGRAM_FILES, ".venv")
 # Environment variables that must not reach the release installer.
 SECRET_VARIABLES = ("DISCORD_TOKEN", "COMICSBOT_GITHUB_TOKEN", "GITHUB_TOKEN", "GH_TOKEN")
 
@@ -410,9 +416,13 @@ def extract_release(archive: Path, dest: Path, version: str, platform: str) -> P
 # -- backup / rollback -----------------------------------------------------------
 
 
-def backup_program_files(install_dir: Path, backup_dir: Path) -> None:
+def program_files(platform: str) -> tuple[str, ...]:
+    return LINUX_PROGRAM_FILES if platform == "linux" else PROGRAM_FILES
+
+
+def backup_program_files(install_dir: Path, backup_dir: Path, names: Iterable[str] = PROGRAM_FILES) -> None:
     backup_dir.mkdir(parents=True, exist_ok=True)
-    for name in PROGRAM_FILES:
+    for name in names:
         source = install_dir / name
         if source.is_symlink():
             continue  # never dereference a link the bot's account may have planted (root reads these)
@@ -429,10 +439,10 @@ def _remove(path: Path) -> None:
         path.unlink()
 
 
-def restore_program_files(install_dir: Path, backup_dir: Path) -> None:
+def restore_program_files(install_dir: Path, backup_dir: Path, names: Iterable[str] = PROGRAM_FILES) -> None:
     """Put the backed-up program files back (and drop ones the failed update added)."""
     owner = install_dir.stat()
-    for name in PROGRAM_FILES:
+    for name in names:
         target = install_dir / name
         _remove(target)
         saved = backup_dir / name
@@ -442,32 +452,39 @@ def restore_program_files(install_dir: Path, backup_dir: Path) -> None:
             shutil.copy2(saved, target)
         else:
             continue
-        # Running as root on Linux: give the files back to the bot's user, as the installer does.
+        # Running as root on Linux: give the files the install folder's owner (root since 2.3), as the installer does.
         if hasattr(os, "geteuid") and os.geteuid() == 0:
             for path in [target, *(target.rglob("*") if target.is_dir() else [])]:
                 os.chown(path, owner.st_uid, owner.st_gid, follow_symlinks=False)
 
 
-def missing_after_restore(install_dir: Path, backup_dir: Path) -> list[str]:
+def missing_after_restore(install_dir: Path, backup_dir: Path, names: Iterable[str] = PROGRAM_FILES) -> list[str]:
     """Names of backed-up program files that are not back in the install folder."""
     return [
         name
-        for name in PROGRAM_FILES
+        for name in names
         if ((backup_dir / name).exists() or (backup_dir / name).is_symlink())
         and not ((install_dir / name).exists() or (install_dir / name).is_symlink())
     ]
 
 
-def write_update_notice(install_dir: Path, release: Release) -> Path:
-    """Leave the release notes for the bot (no secrets), readable and deletable by its account."""
-    path = install_dir / UPDATE_NOTICE
+def data_folder(install_dir: Path) -> Path:
+    """The bot's data folder: ``<install>/data`` if it is a real folder (Linux installs), else the install folder."""
+    data = install_dir / DATA_DIR_NAME
+    return data if data.is_dir() and not data.is_symlink() else install_dir
+
+
+def write_update_notice(folder: Path, release: Release) -> Path:
+    """Leave the release notes for the bot (no secrets) in its data folder, readable and deletable by its account."""
+    path = folder / UPDATE_NOTICE
     data = {"version": release.version, "name": release.name, "body": release.body, "html_url": release.html_url}
-    fd, tmp = tempfile.mkstemp(dir=install_dir, prefix=".update-notice-", suffix=".tmp")
+    # mkstemp never opens an existing file or link; os.replace renames over whatever has the name (no following).
+    fd, tmp = tempfile.mkstemp(dir=folder, prefix=".update-notice-", suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             # Through the open file, not the path: the bot's user can rename things in its folder.
             if hasattr(os, "fchown") and os.geteuid() == 0:
-                owner = install_dir.stat()
+                owner = folder.stat()
                 os.fchown(f.fileno(), owner.st_uid, owner.st_gid)
             if hasattr(os, "fchmod"):
                 os.fchmod(f.fileno(), 0o640)
@@ -477,6 +494,84 @@ def write_update_notice(install_dir: Path, release: Release) -> Path:
         Path(tmp).unlink(missing_ok=True)
         raise
     return path
+
+
+# -- root safety ---------------------------------------------------------------
+
+
+def _running_as_root() -> bool:
+    return hasattr(os, "geteuid") and os.geteuid() == 0
+
+
+def _changeable(path: Path, uid: int, gid: int) -> bool:
+    """Whether an account other than ``uid`` (root) could change ``path`` (not following a link)."""
+    st = path.lstat()
+    if st.st_uid != uid:
+        return True
+    if stat.S_ISLNK(st.st_mode):
+        return False  # a link's own mode means nothing; only its owner (or its folder's) can replace it
+    return bool(st.st_mode & stat.S_IWOTH) or (bool(st.st_mode & stat.S_IWGRP) and st.st_gid != gid)
+
+
+def _changeable_chain(path: Path, uid: int, gid: int, top: Path) -> Path | None:
+    for candidate in (path, *path.parents):
+        if _changeable(candidate, uid, gid):
+            return candidate
+        if candidate == top:
+            break
+    return None
+
+
+def unsafe_path(
+    install_dir: Path,
+    executables: Iterable[Path] = (),
+    *,
+    uid: int = 0,
+    gid: int = 0,
+    top: Path = Path("/"),
+) -> Path | None:
+    """The first path root would run or read code from that another account could change, or None.
+
+    Checks the install folder resolved through links, everything in it except the bot's data folder and
+    ``.env``, the folder's parents, and each of ``executables`` (as given and resolved) with its parents.
+    ``uid``/``gid``/``top`` exist for the tests (normally root and every parent up to ``/``).
+    """
+    try:
+        root = install_dir.resolve(strict=True)
+    except OSError:
+        return install_dir
+    for dirpath, dirnames, filenames in os.walk(root, onerror=None):  # os.walk does not follow links
+        current = Path(dirpath)
+        if current == root:
+            dirnames[:] = [d for d in dirnames if d != DATA_DIR_NAME]
+            filenames = [f for f in filenames if f != ".env"]
+        for name in (*dirnames, *filenames):
+            if _changeable(current / name, uid, gid):
+                return current / name
+    bad = _changeable_chain(root, uid, gid, top)
+    if bad is not None:
+        return bad
+    for executable in executables:
+        executable = Path(os.path.abspath(executable))
+        if not executable.exists():
+            continue
+        for path in (executable, executable.resolve()):
+            bad = _changeable_chain(path, uid, gid, top)
+            if bad is not None:
+                return bad
+    return None
+
+
+def check_root_safety(install_dir: Path) -> None:
+    """Refuse to work as root on an install that another account could change (it would get root)."""
+    executables = [Path(sys.executable), Path(__file__), install_dir / ".venv" / "bin" / "python"]
+    bad = unsafe_path(install_dir, executables)
+    if bad is not None:
+        raise UpdateError(
+            f"{bad} can be changed by an account other than root, and the updater runs as root; refusing to "
+            "update. Install with a release's install.sh (it makes the program files root-owned) into a folder "
+            "only root can change, such as /opt/comicsbot, and use a Python installed system-wide"
+        )
 
 
 # -- installer -----------------------------------------------------------------
@@ -503,7 +598,16 @@ def installer_command(release_dir: Path, install_dir: Path, platform: str) -> li
             "-Yes",
             "-Unattended",
         ]
-    return [shutil.which("bash") or "/bin/bash", str(release_dir / "install.sh"), "--dir", str(install_dir), "--yes"]
+    # The same Python as this updater (checked by check_root_safety), not whichever one PATH finds first.
+    return [
+        shutil.which("env") or "/usr/bin/env",
+        f"PYTHON={sys.executable}",
+        shutil.which("bash") or "/bin/bash",
+        str(release_dir / "install.sh"),
+        "--dir",
+        str(install_dir),
+        "--yes",
+    ]
 
 
 def service_command(install_dir: Path, platform: str, action: str) -> list[str]:
@@ -625,11 +729,12 @@ def update(
         if backup_root is not None:
             backup_root.mkdir(mode=0o700, parents=True, exist_ok=True)
         backup = Path(tempfile.mkdtemp(prefix=f"ComicsBot-{installed}-", dir=backup_root))
+        names = program_files(platform)
         try:
             was_running = runner(service_command(install_dir, platform, "status"), SERVICE_TIMEOUT) == 0
-            backup_program_files(install_dir, backup)
+            backup_program_files(install_dir, backup, names)
             # Written before the installer starts the new version, which reads (and deletes) it on startup.
-            notice = write_update_notice(install_dir, release)
+            notice = write_update_notice(data_folder(install_dir), release)
         except BaseException:
             shutil.rmtree(backup, ignore_errors=True)
             raise
@@ -642,12 +747,13 @@ def update(
 
         log.error("The installer failed (exit code %s); restoring ComicsBot %s", code, installed)
         notice.unlink(missing_ok=True)
-        return roll_back(install_dir, backup, installed, platform, was_running, runner, sleep)
+        return roll_back(install_dir, backup, names, installed, platform, was_running, runner, sleep)
 
 
 def roll_back(
     install_dir: Path,
     backup: Path,
+    names: tuple[str, ...],
     installed: str,
     platform: str,
     was_running: bool,
@@ -657,13 +763,13 @@ def roll_back(
     """Put the previous version back and check that it worked; keep the backup if it did not."""
     runner(service_command(install_dir, platform, "stop"), SERVICE_TIMEOUT)
     try:
-        restore_program_files(install_dir, backup)
+        restore_program_files(install_dir, backup, names)
     except OSError as exc:
         log.exception("Could not restore the previous program files")
         return rollback_failed(
             f"the previous program files could not be put back ({exc})", install_dir, backup, installed, platform
         )
-    missing = missing_after_restore(install_dir, backup)
+    missing = missing_after_restore(install_dir, backup, names)
     if missing:
         return rollback_failed(
             f"{', '.join(missing)} missing from {install_dir} after the restore",
@@ -776,6 +882,8 @@ def main(argv: list[str] | None = None) -> int:
     lock_file = args.lock_file or args.token_file.parent / "update.lock"
     try:
         with update_lock(lock_file):
+            if args.platform == "linux" and _running_as_root():
+                check_root_safety(install_dir)
             token = read_token(args.token_file)
             backup_root = args.backup_dir or args.token_file.parent / "backups"
             return update(install_dir, token, platform=args.platform, check_only=args.check, backup_root=backup_root)

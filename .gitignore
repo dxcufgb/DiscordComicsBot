@@ -1,5 +1,6 @@
 # Bot data and secrets
 .env
+data/
 .env.broken-backup
 state.json
 .state-*.tmp

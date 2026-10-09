@@ -50,13 +50,22 @@ def main() -> int:
         print(f"Configuration error: {exc}", file=sys.stderr)
         return EXIT_CONFIG_ERROR
 
-    setup_logging(config.log_level, config.log_file)
+    try:
+        config.data_dir.mkdir(parents=True, exist_ok=True)
+        setup_logging(config.log_level, config.log_file)
+    except OSError as exc:
+        print(
+            f"Configuration error: cannot write to the data folder {config.data_dir} ({exc.strerror}); "
+            "it must be writable by the account that runs the bot (DATA_DIR in .env)",
+            file=sys.stderr,
+        )
+        return EXIT_CONFIG_ERROR
     log = logging.getLogger("comicsbot")
     try:
-        with InstanceLock(BASE_DIR / "bot.lock"):
+        with InstanceLock(config.lock_file):
             return run_bot(config, log)
     except AlreadyRunning:
-        log.error("ComicsBot is already running from %s; not starting a second copy", BASE_DIR)
+        log.error("ComicsBot is already running with the data in %s; not starting a second copy", config.data_dir)
         return EXIT_ALREADY_RUNNING
 
 
