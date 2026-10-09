@@ -510,6 +510,12 @@ do_install() {
     if [ -e "$INSTALL_DIR/.git" ]; then
         die "$INSTALL_DIR is a git checkout; install into another folder (the default /opt/comicsbot), with --migrate-from $INSTALL_DIR to bring its settings and data"
     fi
+    # Upgrades move everything that is not a program file into data/: never do that to someone else's folder.
+    # A ComicsBot folder has the program files, or .env and data/ left by --uninstall without --purge.
+    if [ -d "$INSTALL_DIR" ] && [ ! -f "$INSTALL_DIR/ComicsBot.py" ] && [ ! -f "$INSTALL_DIR/VERSION" ] \
+        && { [ ! -f "$INSTALL_DIR/.env" ] || [ ! -d "$DATA_DIR" ]; } && [ -n "$(ls -A "$INSTALL_DIR")" ]; then
+        die "$INSTALL_DIR is not empty and is not a ComicsBot install; choose an empty or new folder (the default /opt/comicsbot)"
+    fi
     if [ -z "$TOKEN" ] && [ ! -f "$INSTALL_DIR/.env" ] && [ ! -f "$MIGRATE_FROM/.env" ] && [ ! -t 0 ]; then
         die "a bot token is required: pass --token or set DISCORD_TOKEN"
     fi

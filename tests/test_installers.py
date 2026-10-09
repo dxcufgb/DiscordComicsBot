@@ -39,6 +39,11 @@ def test_install_sh_keeps_program_files_root_only():
     assert updater.splitlines()[1].strip() == "require_root_only"
 
 
+def test_install_sh_refuses_a_folder_that_is_not_a_comicsbot_install():
+    body = INSTALL_SH[INSTALL_SH.index("do_install() {") :]
+    assert body.index("is not a ComicsBot install") < body.index("stop_service")
+
+
 def test_install_sh_removes_the_updater_on_uninstall():
     body = INSTALL_SH[INSTALL_SH.index("do_uninstall() {") :]
     assert body.splitlines()[1].strip() == "remove_updater"

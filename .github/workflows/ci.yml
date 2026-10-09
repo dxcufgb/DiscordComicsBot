@@ -66,6 +66,10 @@ jobs:
         run: |
           tar xzf dist/ComicsBot-*-linux.tar.gz -C "$RUNNER_TEMP"
           cd "$RUNNER_TEMP"/ComicsBot-*/
+          # A non-empty folder that is not a ComicsBot install is refused and left alone.
+          mkdir "$RUNNER_TEMP/other" && echo keep > "$RUNNER_TEMP/other/notes.txt"
+          if sudo DISCORD_TOKEN=ci-fake-token ./install.sh --yes --dir "$RUNNER_TEMP/other"; then exit 1; fi
+          test "$(ls -A "$RUNNER_TEMP/other")" = notes.txt
           sudo DISCORD_TOKEN=ci-fake-token COMICSBOT_GITHUB_TOKEN=ci-fake-github-token ./install.sh --yes --auto-update \
             || echo "installer exited with $? (expected: the bot can't log in with a fake token)"
           sudo systemd-analyze verify /etc/systemd/system/comicsbot.service \
