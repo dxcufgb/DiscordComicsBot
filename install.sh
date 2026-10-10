@@ -562,6 +562,13 @@ do_install() {
             fi
         done
     fi
+    # Release archives ship VERSION; a git checkout does not, so write it from __version__.
+    if [ ! -f "$INSTALL_DIR/VERSION" ]; then
+        local version
+        version="$(sed -n 's/^__version__ = "\(.*\)"$/\1/p' "$INSTALL_DIR/comicsbot/__init__.py")"
+        [ -n "$version" ] || die "cannot read __version__ from $INSTALL_DIR/comicsbot/__init__.py"
+        printf '%s\n' "$version" > "$INSTALL_DIR/VERSION"
+    fi
 
     if [ -n "$MIGRATE_FROM" ]; then
         [ -d "$MIGRATE_FROM" ] || die "--migrate-from: $MIGRATE_FROM is not a folder"
