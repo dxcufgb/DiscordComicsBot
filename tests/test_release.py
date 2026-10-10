@@ -34,7 +34,10 @@ def test_build_archives(tmp_path):
 
     with tarfile.open(linux) as tar:
         members = {m.name.removeprefix(prefix): m for m in tar.getmembers()}
-        assert {"ComicsBot.py", "comicsbot/bot.py", "install.sh", "start-bot.sh", "VERSION"} <= set(members)
+        assert {"ComicsBot.py", "comicsbot/bot.py", "install.sh", "start-bot.sh", "VERSION", "RELEASE_NOTES.md"} <= set(
+            members
+        )
+        assert tar.extractfile(members["RELEASE_NOTES.md"]).read().decode() == notes.read_text()
         assert not any(name.startswith(("tests/", ".github/", "scripts/")) or name.endswith(".bat") for name in members)
         assert members["install.sh"].mode == 0o755
         assert members["ComicsBot.py"].mode == 0o644
@@ -43,7 +46,7 @@ def test_build_archives(tmp_path):
 
     with zipfile.ZipFile(windows) as archive:
         names = {n.removeprefix(prefix) for n in archive.namelist()}
-        assert {"ComicsBot.py", "comicsbot/bot.py", "install.ps1", "install.bat", "start-bot.bat"} <= names
+        assert {"ComicsBot.py", "comicsbot/bot.py", "install.ps1", "install.bat", "RELEASE_NOTES.md"} <= names
         assert not any(name.endswith(".sh") or name.startswith("tests/") for name in names)
         bat = archive.read(prefix + "start-bot.bat")
         assert bat.count(b"\r\n") == bat.count(b"\n")

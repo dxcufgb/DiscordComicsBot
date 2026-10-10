@@ -4,7 +4,8 @@
 
 The version always comes from ``__version__`` in comicsbot/__init__.py (pyproject.toml must
 match). Creates dist/ComicsBot-<version>-linux.tar.gz, dist/ComicsBot-<version>-windows.zip,
-dist/SHA256SUMS and dist/RELEASE_NOTES.md. Only the files needed to install and run the bot
+dist/SHA256SUMS and dist/RELEASE_NOTES.md (also inside both archives: the bot DMs it to server
+admins after a manual upgrade). Only the files needed to install and run the bot
 are included (no tests, CI or development files), and building the same commit twice gives
 byte-identical archives.
 """
@@ -55,6 +56,10 @@ The installer sets up Python if needed, asks for the bot token, installs the dep
 starts the bot as a service. Running a newer release's installer upgrades in place and keeps
 `.env` and all bot data. Coming from a git checkout? Add `--migrate-from /path/to/checkout`
 (Linux) or `-MigrateFrom C:\\path\\to\\checkout` (Windows) to bring its settings and data along.
+
+With `UPDATE_NOTIFY=admins` (the default) the bot DMs update notices to server admins, which needs
+**Server Members Intent** (Developer Portal → your application → Bot → Privileged Gateway Intents). Without it the
+bot logs a warning and notifies the server owners only; set `UPDATE_NOTIFY=owner` or `off` in `.env` to silence it.
 
 Verify downloads with `sha256sum -c SHA256SUMS`.
 """
@@ -121,11 +126,13 @@ def build(out_dir: Path, root: Path = ROOT, expect_version: str | None = None) -
     prefix = f"ComicsBot-{version}"
     mtime = source_date_epoch(root)
     version_file = ("VERSION", f"{version}\n".encode())
+    notes_text = RELEASE_NOTES.format(version=version)
+    notes_file = ("RELEASE_NOTES.md", notes_text.encode())
 
     linux = out_dir / f"{prefix}-linux.tar.gz"
     raw = io.BytesIO()
     with tarfile.open(fileobj=raw, mode="w", format=tarfile.PAX_FORMAT) as tar:
-        for name, data in sorted([*collect(root, "linux"), version_file]):
+        for name, data in sorted([*collect(root, "linux"), version_file, notes_file]):
             info = tarfile.TarInfo(f"{prefix}/{name}")
             info.size = len(data)
             info.mtime = mtime
@@ -138,7 +145,11 @@ def build(out_dir: Path, root: Path = ROOT, expect_version: str | None = None) -
 
     windows = out_dir / f"{prefix}-windows.zip"
     stamp = time.gmtime(max(mtime, ZIP_EPOCH))[:6]
-    windows_files = [*collect(root, "windows"), (version_file[0], version_file[1].replace(b"\n", b"\r\n"))]
+    windows_files = [
+        *collect(root, "windows"),
+        (version_file[0], version_file[1].replace(b"\n", b"\r\n")),
+        notes_file,
+    ]
     with zipfile.ZipFile(windows, "w", zipfile.ZIP_DEFLATED) as archive:
         for name, data in sorted(windows_files):
             info = zipfile.ZipInfo(f"{prefix}/{name}", stamp)
@@ -152,7 +163,7 @@ def build(out_dir: Path, root: Path = ROOT, expect_version: str | None = None) -
         encoding="utf-8",
     )
     notes = out_dir / "RELEASE_NOTES.md"
-    notes.write_text(RELEASE_NOTES.format(version=version), encoding="utf-8")
+    notes.write_text(notes_text, encoding="utf-8")
     return [linux, windows, sums, notes]
 
 

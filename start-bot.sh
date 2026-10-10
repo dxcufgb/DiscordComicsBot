@@ -29,12 +29,25 @@ python_ok() {
     "$1" -c 'import sys; sys.exit(sys.version_info < (3, 10))' 2>/dev/null
 }
 
+# install.sh installs the program files and .venv as root; the bot's account cannot change them.
+read_only() {
+    echo "The virtual environment in $VENV_DIR needs to be $1, but $(id -un) cannot change $2." >&2
+    echo "Run the installer again as root (sudo ./install.sh in a release folder) to do that." >&2
+    exit "$EXIT_CONFIG_ERROR"
+}
+
 setup_venv() {
     if [ -x "$VENV_DIR/bin/python" ] && ! python_ok "$VENV_DIR/bin/python"; then
         echo "Existing virtual environment uses Python < 3.10, recreating it ..."
+        if [ ! -w "$BOT_DIR" ]; then
+            read_only "recreated" "$BOT_DIR"
+        fi
         rm -rf "$VENV_DIR"
     fi
     if [ ! -x "$VENV_DIR/bin/python" ]; then
+        if [ ! -w "$BOT_DIR" ]; then
+            read_only "created" "$BOT_DIR"
+        fi
         if ! python_ok "$PYTHON"; then
             echo "ComicsBot needs Python 3.10 or newer ('$PYTHON' is missing or too old)." >&2
             echo "Install a newer Python or point PYTHON=/path/to/python3.x at one." >&2
@@ -45,6 +58,9 @@ setup_venv() {
     fi
     # Reinstall dependencies only when requirements.txt has changed.
     if ! cmp -s requirements.txt "$VENV_DIR/requirements.installed"; then
+        if [ ! -w "$VENV_DIR" ]; then
+            read_only "updated" "$VENV_DIR"
+        fi
         echo "Installing dependencies ..."
         "$VENV_DIR/bin/python" -m pip install --quiet --upgrade pip
         "$VENV_DIR/bin/python" -m pip install --quiet -r requirements.txt

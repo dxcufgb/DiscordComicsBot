@@ -11,6 +11,8 @@
 ; Unattended: set DISCORD_TOKEN, then run
 ;   ComicsBot-<version>-setup.exe /VERYSILENT [/TASKS=startatboot]
 ; and uninstall with unins000.exe /VERYSILENT [/PURGE].
+; Add "autoupdate" to /TASKS (and set COMICSBOT_GITHUB_TOKEN) to turn on automatic updates. Leaving the
+; task unchecked keeps the current setting; install.bat -DisableAutoUpdate turns them off.
 
 #ifndef AppVersion
   #define AppVersion "0.0.0"
@@ -46,6 +48,8 @@ CloseApplications=no
 [Tasks]
 Name: "startatboot"; Description: "Start the bot when Windows starts, even if nobody is logged in"; \
   Check: IsAdmin; Flags: unchecked
+Name: "autoupdate"; Description: "Install new ComicsBot releases automatically (checked daily; needs a GitHub token)"; \
+  Flags: unchecked
 
 [Files]
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs
@@ -59,6 +63,7 @@ Name: "{group}\Uninstall ComicsBot"; Filename: "{uninstallexe}"
 [Code]
 var
   TokenPage: TInputQueryWizardPage;
+  GitHubTokenPage: TInputQueryWizardPage;
   PurgeData: Boolean;
 
 function SetEnvironmentVariable(lpName, lpValue: String): Boolean;
@@ -82,6 +87,19 @@ begin
     Result := Trim(GetEnv('DISCORD_TOKEN'));
 end;
 
+{ Automatic updates keep their GitHub token here (readable only by the user); see install.ps1. }
+function HasGitHubToken(): Boolean;
+begin
+  Result := FileExists(InstallDir() + '\updater\github-token');
+end;
+
+function GitHubToken(): String;
+begin
+  Result := Trim(GitHubTokenPage.Values[0]);
+  if Result = '' then
+    Result := Trim(GetEnv('COMICSBOT_GITHUB_TOKEN'));
+end;
+
 function PowerShell(Params: String; Show: Integer; var Code: Integer): Boolean;
 begin
   Result := Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
@@ -94,13 +112,26 @@ begin
     'The token lets ComicsBot log in to Discord.',
     'Create an application at https://discord.com/developers/applications, open Bot and click ' +
     'Reset Token, then paste the token here. It is stored in %LOCALAPPDATA%\ComicsBot\.env, ' +
-    'readable only by your Windows account.');
+    'readable only by your Windows account.' + #13#10#13#10 +
+    'On the same Bot page, turn on "Server Members Intent" under Privileged Gateway Intents and save. ' +
+    'Without it update notices go to server owners only, not to all server admins.');
   TokenPage.Add('Bot token:', True);
+  GitHubTokenPage := CreateInputQueryPage(TokenPage.ID, 'GitHub token for automatic updates',
+    'New releases are downloaded from the private GitHub repository dxcufgb/DiscordComicsBot.',
+    'Create a fine-grained token at https://github.com/settings/personal-access-tokens/new with access to ' +
+    'only dxcufgb/DiscordComicsBot and the permission Contents: Read-only, then paste it here. It is stored ' +
+    'in %LOCALAPPDATA%\ComicsBot\updater, readable only by your Windows account.');
+  GitHubTokenPage.Add('GitHub token:', True);
 end;
 
 function ShouldSkipPage(PageID: Integer): Boolean;
 begin
-  Result := (PageID = TokenPage.ID) and (HasSettings() or (Trim(GetEnv('DISCORD_TOKEN')) <> ''));
+  Result := False;
+  if PageID = TokenPage.ID then
+    Result := HasSettings() or (Trim(GetEnv('DISCORD_TOKEN')) <> '');
+  if PageID = GitHubTokenPage.ID then
+    Result := not WizardIsTaskSelected('autoupdate') or HasGitHubToken() or
+      (Trim(GetEnv('COMICSBOT_GITHUB_TOKEN')) <> '');
 end;
 
 function NextButtonClick(CurPageID: Integer): Boolean;
@@ -109,6 +140,11 @@ begin
   if (CurPageID = TokenPage.ID) and (Token() = '') then
   begin
     MsgBox('Please paste the bot token.', mbError, MB_OK);
+    Result := False;
+  end;
+  if (CurPageID = GitHubTokenPage.ID) and (GitHubToken() = '') then
+  begin
+    MsgBox('Please paste the GitHub token, or go back and uncheck automatic updates.', mbError, MB_OK);
     Result := False;
   end;
 end;
@@ -121,6 +157,13 @@ begin
   if not HasSettings() and (Token() = '') then
   begin
     Result := 'A Discord bot token is required. For an unattended install, set the DISCORD_TOKEN environment variable.';
+    exit;
+  end;
+  { The wizard asks for the token on its own page; this is for /TASKS=autoupdate without COMICSBOT_GITHUB_TOKEN. }
+  if WizardIsTaskSelected('autoupdate') and not HasGitHubToken() and (GitHubToken() = '') and
+    (Pos('AUTOUPDATE', Uppercase(GetCmdTail())) > 0) then
+  begin
+    Result := 'Automatic updates need a GitHub token. For an unattended install, set the COMICSBOT_GITHUB_TOKEN environment variable.';
     exit;
   end;
   { Stop a running bot before its files are replaced. }
@@ -141,10 +184,19 @@ begin
   Params := '-File "' + ExpandConstant('{app}') + '\install.ps1" -InstallDir "' + ExpandConstant('{app}') + '" -Yes';
   if WizardIsTaskSelected('startatboot') then
     Params := Params + ' -AtStartup';
+  { Unchecked keeps the current setting. A box remembered from an earlier setup run is ignored when the
+    token has been removed since (install.bat -DisableAutoUpdate) and no new one was given. }
+  if WizardIsTaskSelected('autoupdate') and (HasGitHubToken() or (GitHubToken() <> '')) then
+  begin
+    if GitHubToken() <> '' then
+      SetEnvironmentVariable('COMICSBOT_GITHUB_TOKEN', GitHubToken());
+    Params := Params + ' -EnableAutoUpdate';
+  end;
   Log('Running install.ps1 with: ' + Params);
   if not PowerShell(Params, SW_SHOW, Code) then
     Code := -1;
   SetEnvironmentVariable('DISCORD_TOKEN', '');
+  SetEnvironmentVariable('COMICSBOT_GITHUB_TOKEN', '');
   Log(Format('install.ps1 exit code: %d (see install.log in the install folder)', [Code]));
   if Code <> 0 then
     SuppressibleMsgBox('ComicsBot was installed, but the bot did not log in to Discord.' + #13#10#13#10 +

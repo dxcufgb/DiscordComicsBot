@@ -41,28 +41,84 @@ jobs:
         with:
           persist-credentials: false
       - name: Shellcheck
-        run: shellcheck install.sh start-bot.sh
+        run: shellcheck install.sh start-bot.sh .github/check-linux-layout.sh
       - name: Build release archives
         run: python3 scripts/build_release.py --out dist
+      - name: Make /opt and the Python the installer uses root-only
+        run: |
+          # The runner image leaves /opt writable by the runner account; on a normal system only root can write it,
+          # which the root updater checks for every parent folder of the install folder.
+          sudo chown root:root /opt && sudo chmod go-w /opt
+          # Likewise the Python that install.sh picks (as root) and the updater runs: a tool-cache Python belongs to
+          # the runner account, and the updater refuses a Python another account can change.
+          py="$(sudo bash -c 'for c in python3.13 python3.12 python3.11 python3.10 python3; do command -v "$c" && break; done')"
+          real="$(readlink -f "$py")"
+          echo "installer Python: $py -> $real"
+          case "$real" in
+            /opt/hostedtoolcache/*)
+              v="${real%%/bin/*}"
+              sudo chown -R root:root "$v" && sudo chmod -R go-w "$v" ;;
+          esac
+          for p in "$py" "$real"; do
+            while p="$(dirname "$p")"; [ "$p" != / ]; do sudo chown root:root "$p"; sudo chmod go-w "$p"; done
+          done
       - name: Install (systemd service)
         run: |
           tar xzf dist/ComicsBot-*-linux.tar.gz -C "$RUNNER_TEMP"
           cd "$RUNNER_TEMP"/ComicsBot-*/
-          sudo DISCORD_TOKEN=ci-fake-token ./install.sh --yes \
+          # A non-empty folder that is not a ComicsBot install is refused and left alone.
+          mkdir "$RUNNER_TEMP/other" && echo keep > "$RUNNER_TEMP/other/notes.txt"
+          if sudo DISCORD_TOKEN=ci-fake-token ./install.sh --yes --dir "$RUNNER_TEMP/other"; then exit 1; fi
+          test "$(ls -A "$RUNNER_TEMP/other")" = notes.txt
+          sudo DISCORD_TOKEN=ci-fake-token COMICSBOT_GITHUB_TOKEN=ci-fake-github-token ./install.sh --yes --auto-update \
             || echo "installer exited with $? (expected: the bot can't log in with a fake token)"
-          sudo systemd-analyze verify /etc/systemd/system/comicsbot.service
+          sudo systemd-analyze verify /etc/systemd/system/comicsbot.service \
+            /etc/systemd/system/comicsbot-update.service /etc/systemd/system/comicsbot-update.timer
+          systemctl is-enabled comicsbot-update.timer
+          test "$(sudo stat -c '%U:%G %a' /etc/comicsbot/github-token)" = "root:root 600"
+          test "$(sudo stat -c '%U:%G %a' /usr/local/lib/comicsbot-updater/updater.py)" = "root:root 644"
+          # A fake GitHub token must fail cleanly, without printing the token.
+          if out="$(sudo /opt/comicsbot/install.sh --check-update 2>&1)"; then echo "$out"; exit 1; fi
+          echo "$out"
+          grep -q "GitHub refused the request" <<< "$out"
+          if grep -q "ci-fake-github-token" <<< "$out"; then echo "token leaked"; exit 1; fi
           test "$(sudo stat -c '%U:%G %a' /opt/comicsbot/.env)" = "comicsbot:comicsbot 600"
-          sudo cat /opt/comicsbot/discord.log
-          sudo grep -q "Discord rejected the token" /opt/comicsbot/discord.log
+          sudo cat /opt/comicsbot/data/discord.log
+          sudo grep -q "Discord rejected the token" /opt/comicsbot/data/discord.log
           systemctl show comicsbot -p User -p UnitFileState | tee /dev/stderr | grep -q "User=comicsbot"
+          "$GITHUB_WORKSPACE"/.github/check-linux-layout.sh
+      - name: Upgrade an install with the pre-2.3 layout
+        run: |
+          cd "$RUNNER_TEMP"/ComicsBot-*/
+          # Turn the install back into the old layout: the bot's account owns everything, its data next to the
+          # program files, and something of its own lying around.
+          sudo systemctl stop comicsbot
+          sudo sh -c 'cd /opt/comicsbot && mv data/* . && rmdir data && echo mine > notes.txt && chown -R comicsbot:comicsbot .'
+          sudo ./install.sh --yes || echo "installer exited with $? (expected: the bot can't log in with a fake token)"
+          sudo ls -la /opt/comicsbot /opt/comicsbot/data
+          for f in state.json bot.lock notes.txt discord.log; do
+            sudo test ! -e "/opt/comicsbot/$f"
+            test "$(sudo stat -c '%U:%G' "/opt/comicsbot/data/$f")" = "comicsbot:comicsbot"
+          done
+          sudo grep -q "Discord rejected the token" /opt/comicsbot/data/discord.log
+          sudo grep -q "ci-fake-token" /opt/comicsbot/.env
+          "$GITHUB_WORKSPACE"/.github/check-linux-layout.sh
+          # Running it again moves nothing.
+          before="$(sudo ls -A /opt/comicsbot/data)"
+          sudo ./install.sh --yes > /dev/null 2>&1 || true
+          test "$(sudo ls -A /opt/comicsbot/data)" = "$before"
       - name: Upgrade in place, then uninstall
         run: |
           cd "$RUNNER_TEMP"/ComicsBot-*/
           sudo ./install.sh --yes || true
           sudo grep -q "ci-fake-token" /opt/comicsbot/.env
+          systemctl is-enabled comicsbot-update.timer  # the upgrade kept automatic updates on
           sudo /opt/comicsbot/install.sh --uninstall --purge
           test ! -e /opt/comicsbot
           test ! -e /etc/systemd/system/comicsbot.service
+          test ! -e /etc/systemd/system/comicsbot-update.timer
+          test ! -e /usr/local/lib/comicsbot-updater
+          sudo test ! -e /etc/comicsbot/github-token
           ! id comicsbot
 
   # Same on Windows with Windows PowerShell 5.1: a scheduled task that starts at boot (-AtStartup),
@@ -95,8 +151,10 @@ jobs:
           Expand-Archive (Get-Item dist/ComicsBot-*-windows.zip) -DestinationPath $env:RUNNER_TEMP
           $src = (Get-ChildItem $env:RUNNER_TEMP -Directory -Filter 'ComicsBot-*')[0].FullName
           $env:DISCORD_TOKEN = 'ci-fake-token'
-          powershell -NoProfile -ExecutionPolicy Bypass -File "$src\install.ps1" -AtStartup -Yes
+          $env:COMICSBOT_GITHUB_TOKEN = 'ci-fake-github-token'
+          powershell -NoProfile -ExecutionPolicy Bypass -File "$src\install.ps1" -AtStartup -Yes -EnableAutoUpdate
           "installer exit code: $LASTEXITCODE (non-zero expected: the bot can't log in with a fake token)"
+          $env:COMICSBOT_GITHUB_TOKEN = ''
           $dir = "$env:LOCALAPPDATA\ComicsBot"
           $task = Get-ScheduledTask -TaskName ComicsBot
           "task: $($task.Principal.UserId), logon type $($task.Principal.LogonType), time limit $($task.Settings.ExecutionTimeLimit)"
@@ -106,6 +164,13 @@ jobs:
           "'.env' readable by: $($readers -join ', ')"
           if ($readers -match 'Users|Everyone|Administrators') { throw '.env must only be readable by its owner' }
           if ([IO.File]::ReadAllBytes("$dir\.env")[0] -eq 0xEF) { throw '.env must not start with a byte-order mark' }
+          $update = Get-ScheduledTask -TaskName ComicsBot-Update
+          "update task: $($update.Principal.UserId), logon type $($update.Principal.LogonType)"
+          if ($update.Principal.LogonType -ne 'S4U') { throw 'update task should run like the bot task (S4U)' }
+          $readers = (Get-Acl "$dir\updater\github-token").Access.IdentityReference.Value
+          "'github-token' readable by: $($readers -join ', ')"
+          if ($readers -match 'Users|Everyone|Administrators') { throw 'github-token must only be readable by its owner' }
+          if (-not (Test-Path "$dir\updater\updater.py")) { throw 'updater not installed' }
           $log = "$dir\discord.log"
           foreach ($i in 1..30) {
             if ((Test-Path $log) -and (Select-String -Quiet -Path $log -Pattern 'Discord rejected the token')) { break }
@@ -121,8 +186,10 @@ jobs:
           $dir = "$env:LOCALAPPDATA\ComicsBot"
           powershell -NoProfile -ExecutionPolicy Bypass -File "$src\install.ps1" -AtStartup -Yes
           if (-not (Select-String -Quiet -Path "$dir\.env" -Pattern 'ci-fake-token')) { throw 'settings lost on upgrade' }
+          if (-not (Get-ScheduledTask -TaskName ComicsBot-Update -ErrorAction SilentlyContinue)) { throw 'upgrade turned off automatic updates' }
           powershell -NoProfile -ExecutionPolicy Bypass -File "$dir\install.ps1" -Uninstall -Purge
           if (Get-ScheduledTask -TaskName ComicsBot -ErrorAction SilentlyContinue) { throw 'task not removed' }
+          if (Get-ScheduledTask -TaskName ComicsBot-Update -ErrorAction SilentlyContinue) { throw 'update task not removed' }
           if (Test-Path $dir) { throw 'install folder not removed' }
           exit 0
 
@@ -149,7 +216,8 @@ jobs:
         run: |
           $setup = (Get-Item dist/ComicsBot-*-setup.exe).FullName
           $env:DISCORD_TOKEN = 'ci-fake-token'
-          $setupArgs = '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/TASKS=startatboot', "/LOG=$env:RUNNER_TEMP\setup.log"
+          $env:COMICSBOT_GITHUB_TOKEN = 'ci-fake-github-token'
+          $setupArgs = '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/TASKS=startatboot,autoupdate', "/LOG=$env:RUNNER_TEMP\setup.log"
           $p = Start-Process $setup -ArgumentList $setupArgs -Wait -PassThru
           Get-Content "$env:RUNNER_TEMP\setup.log" -Tail 25
           if ($p.ExitCode -ne 0) { throw "setup exited with $($p.ExitCode)" }
@@ -165,6 +233,8 @@ jobs:
           "'.env' readable by: $($readers -join ', ')"
           if ($readers -match 'Users|Everyone|Administrators|SYSTEM') { throw '.env must only be readable by its owner' }
           if (Select-String -Quiet -Path "$env:RUNNER_TEMP\setup.log" -Pattern 'ci-fake-token') { throw 'token leaked into the setup log' }
+          if (Select-String -Quiet -Path "$env:RUNNER_TEMP\setup.log" -Pattern 'ci-fake-github-token') { throw 'GitHub token leaked into the setup log' }
+          if (-not (Get-ScheduledTask -TaskName ComicsBot-Update -ErrorAction SilentlyContinue)) { throw 'autoupdate task was not applied' }
           if (-not (Select-String -Quiet -Path "$dir\discord.log" -Pattern 'Discord rejected the token')) { throw 'bot did not run' }
           if (-not (Test-Path "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\ComicsBot\Restart ComicsBot.lnk")) { throw 'Start menu shortcuts missing' }
           exit 0
@@ -177,4 +247,5 @@ jobs:
           foreach ($i in 1..30) { if (-not (Test-Path $dir)) { break }; Start-Sleep -Seconds 2 }
           if (Test-Path $dir) { Get-ChildItem $dir -Force; throw 'install folder not removed' }
           if (Get-ScheduledTask -TaskName ComicsBot -ErrorAction SilentlyContinue) { throw 'task not removed' }
+          if (Get-ScheduledTask -TaskName ComicsBot-Update -ErrorAction SilentlyContinue) { throw 'update task not removed' }
           exit 0

@@ -5,7 +5,10 @@ A Discord bot that watches RSS/Atom feeds of web comics and posts new strips to 
 ## Setup
 
 1. Create an application at <https://discord.com/developers/applications>. Under **Bot**, reset and copy the token.
-   No privileged intents are needed.
+   Under Bot → Privileged Gateway Intents, also turn on **"Server Members Intent"** and save. The bot uses it to find
+   the server admins it sends update notices to. Without it the bot still runs: Discord refuses the intent, the bot
+   logs one warning and starts again without it, and update notices then go to server owners only. It is not
+   requested when `UPDATE_NOTIFY` is `owner` or `off` (set `owner` to silence the warning).
 2. Invite the bot with this URL, replacing `CLIENT_ID` with your application ID:
    `https://discord.com/oauth2/authorize?client_id=CLIENT_ID&scope=bot+applications.commands&permissions=19456`
    (View Channel, Send Messages, Embed Links).
@@ -29,7 +32,31 @@ The bot is installed in `/opt/comicsbot` and runs as the system user `comicsbot`
 Distributions older than Debian 12 / Ubuntu 22.04 ship a Python older than 3.10; upgrade the system, or install a
 newer Python yourself and run `sudo PYTHON=/path/to/python3.x ./install.sh`.
 Manage it with `systemctl status|restart|stop comicsbot`; logs are in `journalctl -u comicsbot` and
-`/opt/comicsbot/discord.log`.
+`/opt/comicsbot/data/discord.log`.
+
+**Linux layout.** Root runs the program files (when installing, and the automatic updater), so the bot's own account
+must not be able to change them:
+
+| Path | Owner, mode | What |
+|---|---|---|
+| `/opt/comicsbot/` | `root:root 755` | Program files: `ComicsBot.py`, `comicsbot/`, `start-bot.sh`, `install.sh`, `requirements.txt`, `README.md`, `VERSION`, `RELEASE_NOTES.md`, `.env.example` (all root's, not writable by group or others) |
+| `/opt/comicsbot/.venv/` | `root:root` | The virtual environment, built by the installer as root; the bot only runs it |
+| `/opt/comicsbot/.env` | `comicsbot:comicsbot 600` | Settings and the bot token |
+| `/opt/comicsbot/data/` | `comicsbot:comicsbot 750` | Everything the bot writes: `state.json`, `discord.log` (+ rotations), `bot.lock`, `update-notice.json`, temporary files of atomic writes |
+
+The bot uses `<program folder>/data` when that folder exists, and otherwise writes next to its program files (as
+before 2.3; this is what Windows installs and runs from source do). Set `DATA_DIR` in `.env` to use another folder
+(relative paths are relative to the program folder); the Linux installer and updater always use `data/`.
+
+**Upgrading an install from before 2.3** (where the `comicsbot` account owned the whole folder) switches to this
+layout: the installer gives the folder and the program files to root, moves everything else that the bot kept in the
+folder (`state.json`, `discord.log*`, `bot.lock`, `update-notice.json`, `.state-*.tmp`, old `comics.json` /
+`*-Comics.json`, any other file that is not a program file, `.env` or `.venv`) into `data/` with its owner and
+mode unchanged (a name that is already taken in `data/` gets `.old`, `.old2`, ... appended), deletes the bot
+account's pip cache (`.cache`) and rebuilds `.venv` as root. Running the installer again does nothing more. The
+automatic updater runs the new release's `install.sh`, so automatic updates migrate the same way; if such an update
+fails, the old updater puts the old program files back but not the old layout, so install the new release by hand
+(`sudo ./install.sh`) in that case.
 
 **Windows**: run `ComicsBot-X.Y.Z-setup.exe`. The wizard asks for the bot token and installs everything. Run it as
 administrator to get the option to start the bot when Windows starts, even if nobody logs in. The Start menu gets
@@ -51,7 +78,83 @@ same way (`install.bat -AtStartup` as administrator to start at boot) and is man
 | Uninstall (keeps `.env` and data) | `--uninstall` | `-Uninstall` |
 | Uninstall everything | `--uninstall --purge` | `-Uninstall -Purge` |
 
-Upgrades keep `.env`, `state.json` and the log.
+Upgrades keep `.env` and the data (`state.json`, the log). When upgrading from 2.2.0 or older, turn on
+"Server Members Intent" for the bot in the Developer Portal (see Setup) so update notices reach all server admins;
+without it they go to the server owners only.
+
+### Automatic updates
+
+Off by default. When turned on, the bot checks once a day for a newer release on GitHub and installs it the same way
+a manual upgrade does (the release's own installer), so `.env`, `state.json`, the logs and their permissions are kept.
+
+How it works: the updater (`comicsbot/updater.py`, Python standard library only) asks
+`https://api.github.com/repos/dxcufgb/DiscordComicsBot/releases/latest` for the latest published release (drafts and
+pre-releases are ignored) and does nothing unless its version is newer than the installed one. Otherwise it downloads
+this system's archive (`ComicsBot-X.Y.Z-linux.tar.gz` or `-windows.zip`) and checks it against the release's
+`SHA256SUMS`, extracts it into a new temporary folder and runs its installer. If the installer fails (for example the
+new version does not log in to Discord within 30-45 seconds), the previous program files are put back and, if the
+bot was running before, the old version is restarted and checked again 15 seconds later. If that rollback fails too
+(the files cannot be put back, or the old version does not start), the updater logs `ROLLBACK FAILED: ...` with the
+steps to recover by hand, keeps the backup of the previous version (`/var/backups/comicsbot-update/ComicsBot-<old
+version>-*` on Linux, `%LOCALAPPDATA%\ComicsBot\updater\backups\...` on Windows; the message names it) and exits
+with code 3. Only one update runs at a time; downloads are HTTPS only, with timeouts and size limits.
+
+**GitHub token.** The repository is private, so the updater needs a token that can read it:
+
+1. Open <https://github.com/settings/personal-access-tokens/new> (Settings → Developer settings → Personal access
+   tokens → Fine-grained tokens → Generate new token).
+2. Resource owner: `dxcufgb`; Repository access: *Only select repositories* → `dxcufgb/DiscordComicsBot`.
+3. Permissions → Repository permissions → **Contents: Read-only** (Metadata: Read-only is added automatically).
+   Nothing else.
+4. Pick an expiration date and generate it. When it expires, updates fail with "GitHub refused the request"; enable
+   automatic updates again with a new token (it replaces the stored one).
+
+The installer asks for the token, or reads it from the `COMICSBOT_GITHUB_TOKEN` environment variable; it is never
+passed on the command line. It is stored apart from the bot's `.env` and sent only to `api.github.com` (the actual
+download is a redirect to GitHub's storage, which is fetched without it). It never appears in a log.
+
+| | Linux | Windows |
+|---|---|---|
+| Turn on while installing | `sudo ./install.sh --auto-update` (an interactive first install also asks) | Check *Install new ComicsBot releases automatically* in the setup, or `install.bat -EnableAutoUpdate` |
+| Turn on later | `sudo /opt/comicsbot/install.sh --enable-auto-update` | `install.bat -EnableAutoUpdate` in the install folder |
+| Turn off (deletes the token) | `sudo /opt/comicsbot/install.sh --disable-auto-update` | `install.bat -DisableAutoUpdate` |
+| Check only (tests the token) | `sudo /opt/comicsbot/install.sh --check-update` | `install.bat -CheckUpdate` |
+| Update now | `sudo /opt/comicsbot/install.sh --update-now` | `install.bat -UpdateNow` |
+| Schedule | systemd timer `comicsbot-update.timer`, daily with up to 6 h random delay, runs missed checks after boot | Scheduled task `ComicsBot-Update`, daily between 04:00 and 08:00, or as soon as possible after that |
+| Runs as | root (it runs `install.sh`), in a hardened systemd service | the same Windows account as the bot (at logon, or without logon when the bot starts at boot) |
+| Token stored in | `/etc/comicsbot/github-token` (root, mode 600) | `%LOCALAPPDATA%\ComicsBot\updater\github-token` (readable only by your account, like `.env`) |
+| Log | `journalctl -u comicsbot-update` | `%LOCALAPPDATA%\ComicsBot\updater\update.log` |
+
+Upgrading (manually, or by the updater) keeps the choice; uninstalling removes the timer or task, the updater and
+the token. On Linux the updater runs from a root-owned copy in `/usr/local/lib/comicsbot-updater`, runs the new
+release's `install.sh` from its own extracted copy and writes `update-notice.json` into `data/`. Because it runs as
+root, turning automatic updates on (and every updater run) refuses an install folder (resolved through links),
+program file, `.venv` file or parent folder that an account other than root could change, and a Python interpreter
+(the given path, the file it leads to, or their folders) that one could change: install into a folder only root can
+write, such as the default `/opt/comicsbot`, with a system-wide Python. The updater also backs up and restores `.venv`
+on Linux. A setup run as administrator with *start at boot* sets up the update task to run
+without a logon too; that needs administrator rights, also for `install.bat -EnableAutoUpdate` later.
+Unattended Windows setup: set `COMICSBOT_GITHUB_TOKEN` and add `autoupdate` to `/TASKS`.
+
+Automatic updates work from the first release that includes the updater; install that one by hand.
+
+### Update notices to server admins
+
+When the bot starts on a newer version than it ran before (after an automatic or a manual upgrade), it sends one DM
+per person to the admins of the servers it is in: "ComicsBot updated to vX.Y.Z" with the release's changes and the
+servers it applies to. The changes come from the GitHub release after an automatic update; the release's "Install"
+section is left out. After a manual upgrade only the bundled `RELEASE_NOTES.md` is available, which holds just the
+install steps, so the DM shows the version and a link to the release.
+Each version is announced once; a fresh install only records its version. Finding the Administrator members uses
+the **Server Members Intent**, which must be enabled in the Developer Portal (see Setup). If it is not, Discord
+refuses it; the bot then logs a warning (`Discord refused the Server Members intent ...`), starts again without it
+and sends the notices to the server owners only, as with `owner`. `owner` and `off` do not request it. Set in `.env`:
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `UPDATE_NOTIFY` | `admins` | `admins`: server owners and members with the Administrator permission; `owner`: owners only; `off`: no DMs |
+
+Admins who have DMs from server members turned off are skipped (logged, not retried).
 
 ### Run from source
 

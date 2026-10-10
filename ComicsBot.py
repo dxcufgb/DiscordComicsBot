@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import sys
+from dataclasses import replace
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
@@ -16,7 +17,7 @@ import discord  # noqa: E402
 from comicsbot.bot import ComicsBot  # noqa: E402
 from comicsbot.config import EXIT_CONFIG_ERROR, Config, ConfigError, load_config  # noqa: E402
 from comicsbot.lock import AlreadyRunning, InstanceLock  # noqa: E402
-from comicsbot.storage import load_or_migrate  # noqa: E402
+from comicsbot.storage import State, load_or_migrate  # noqa: E402
 
 BASE_DIR = Path(__file__).resolve().parent
 # Exit code that tells the start scripts to restart the bot immediately.
@@ -49,14 +50,32 @@ def main() -> int:
         print(f"Configuration error: {exc}", file=sys.stderr)
         return EXIT_CONFIG_ERROR
 
-    setup_logging(config.log_level, config.log_file)
+    try:
+        config.data_dir.mkdir(parents=True, exist_ok=True)
+        setup_logging(config.log_level, config.log_file)
+    except OSError as exc:
+        print(
+            f"Configuration error: cannot write to the data folder {config.data_dir} ({exc.strerror}); "
+            "it must be writable by the account that runs the bot (DATA_DIR in .env)",
+            file=sys.stderr,
+        )
+        return EXIT_CONFIG_ERROR
     log = logging.getLogger("comicsbot")
     try:
-        with InstanceLock(BASE_DIR / "bot.lock"):
+        with InstanceLock(config.lock_file):
             return run_bot(config, log)
     except AlreadyRunning:
-        log.error("ComicsBot is already running from %s; not starting a second copy", BASE_DIR)
+        log.error("ComicsBot is already running with the data in %s; not starting a second copy", config.data_dir)
         return EXIT_ALREADY_RUNNING
+
+
+MEMBERS_INTENT_FALLBACK = (
+    "Discord refused the Server Members intent, which UPDATE_NOTIFY=admins uses to find the server admins. "
+    "Running without it: update notices go to server owners only. To DM the admins as well, turn on "
+    '"Server Members Intent" at https://discord.com/developers/applications (your application -> Bot -> '
+    "Privileged Gateway Intents), save and restart the bot; or set UPDATE_NOTIFY=owner in .env to silence "
+    "this warning"
+)
 
 
 def run_bot(config: Config, log: logging.Logger) -> int:
@@ -66,6 +85,24 @@ def run_bot(config: Config, log: logging.Logger) -> int:
         log.exception("Could not load %s", config.state_file)
         return EXIT_CONFIG_ERROR
 
+    try:
+        return run_client(config, state, log)
+    except discord.PrivilegedIntentsRequired as exc:
+        if config.update_notify != "admins":  # only "admins" requests a privileged intent
+            log.error("ComicsBot stopped because of an unexpected error: %s", exc)
+            return 1
+        log.warning(MEMBERS_INTENT_FALLBACK)
+    # discord.py has closed the first client (and with it its aiohttp session) before the exception gets
+    # here; start a fresh one without the members intent. main() keeps holding the instance lock.
+    try:
+        return run_client(replace(config, update_notify="owner"), state, log)
+    except discord.PrivilegedIntentsRequired as exc:
+        log.error("ComicsBot stopped because of an unexpected error: %s", exc)
+        return 1
+
+
+def run_client(config: Config, state: State, log: logging.Logger) -> int:
+    """Run one client until it stops; a refused privileged intent is left to the caller."""
     bot = ComicsBot(config, state)
     try:
         bot.run(config.token, log_handler=None)
@@ -73,8 +110,7 @@ def run_bot(config: Config, log: logging.Logger) -> int:
         log.error("Discord rejected the token; check DISCORD_TOKEN in .env")
         return EXIT_CONFIG_ERROR
     except discord.PrivilegedIntentsRequired:
-        log.error("The bot requested an intent that is not enabled in the Developer Portal")
-        return EXIT_CONFIG_ERROR
+        raise
     except Exception as exc:
         # Log it so the crash shows up in discord.log, not only on the console.
         log.exception("ComicsBot stopped because of an unexpected error: %s", exc)

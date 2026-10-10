@@ -26,7 +26,8 @@ class State:
           "comics": {"<name>": {"url": "<feed url>"}},
           "guilds": {"<guild id>": {"channel_id": <int|null>,
                                     "subscriptions": {"<name>": {"last_id": <str|null>}}}},
-          "christmas_year": <int|null>
+          "christmas_year": <int|null>,
+          "bot_version": <str|null>   # version that last ran, to notice upgrades (added in 2.3)
         }
     """
 
@@ -36,6 +37,8 @@ class State:
         self.comics: dict[str, dict[str, Any]] = data.get("comics", {})
         self.guilds: dict[str, dict[str, Any]] = data.get("guilds", {})
         self.christmas_year: int | None = data.get("christmas_year")
+        version = data.get("bot_version")
+        self.bot_version: str | None = version if isinstance(version, str) else None
 
     # -- loading / saving -------------------------------------------------
 
@@ -53,6 +56,7 @@ class State:
             "comics": self.comics,
             "guilds": self.guilds,
             "christmas_year": self.christmas_year,
+            "bot_version": self.bot_version,
         }
 
     def save(self) -> None:

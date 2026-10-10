@@ -1,5 +1,6 @@
 # Bot data and secrets
 .env
+data/
 .env.broken-backup
 state.json
 .state-*.tmp
@@ -16,3 +17,4 @@ __pycache__/
 bot.lock
 dist/
 install.log
+update-notice.json
