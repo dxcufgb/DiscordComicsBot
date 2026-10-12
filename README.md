@@ -248,11 +248,12 @@ semgrep scan --metrics=off --error --severity WARNING --severity ERROR \
   --config p/python --config p/javascript --config p/security-audit \
   --config p/secrets --config p/github-actions --config r/bash
 pip-audit --strict -r requirements.txt
-pip-audit -r requirements-dev.txt
+pip-audit --strict -r requirements-dev.txt
 ```
 
-Mark a false positive with `# nosemgrep: <rule-id>` and a reason (Semgrep) or a narrow, commented allowlist entry in
-`.gitleaks.toml` (gitleaks).
+Mark a false positive with `# nosemgrep: <rule-id>` (Python, shell) on or above the line, with a reason (Semgrep), or
+with a narrow, commented allowlist entry in `.gitleaks.toml` (gitleaks; start it with `[extend]` `useDefault = true`
+so the default rules stay on).
 
 ### Releasing
 
