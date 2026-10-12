@@ -236,6 +236,24 @@ pip install -r requirements-dev.txt
 ruff check . && ruff format --check . && pytest
 ```
 
+The **Security** workflow (`.github/workflows/security.yml`; GitHub's secret scanning and CodeQL are not available for
+this private repository) runs on every pull request, on pushes to `main` and weekly: `Secrets (gitleaks)` scans the
+whole git history, `Code (Semgrep)` runs the Semgrep registry rules, `Dependencies` runs pip-audit on
+`requirements.txt` and `requirements-dev.txt`. The same checks locally (gitleaks 8.30.1, semgrep 1.180.0, pip-audit
+2.10.1):
+
+```sh
+gitleaks git --redact .
+semgrep scan --metrics=off --error --severity WARNING --severity ERROR \
+  --config p/python --config p/javascript --config p/security-audit \
+  --config p/secrets --config p/github-actions --config p/bash
+pip-audit --strict -r requirements.txt
+pip-audit -r requirements-dev.txt
+```
+
+Mark a false positive with `# nosemgrep: <rule-id>` and a reason (Semgrep) or a narrow, commented allowlist entry in
+`.gitleaks.toml` (gitleaks).
+
 ### Releasing
 
 **Actions → Release → Run workflow → type the version** (`1.2.3`; a leading `v` is dropped, `1.2.3-rc.1` makes a
