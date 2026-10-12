@@ -27,7 +27,8 @@ class State:
           "guilds": {"<guild id>": {"channel_id": <int|null>,
                                     "subscriptions": {"<name>": {"last_id": <str|null>}}}},
           "christmas_year": <int|null>,
-          "bot_version": <str|null>   # version that last ran, to notice upgrades (added in 2.3)
+          "bot_version": <str|null>,  # version that last ran, to notice upgrades (added in 2.3)
+          "commands_hash": <str|null> # fingerprint of the last synced slash commands (added in 2.5)
         }
     """
 
@@ -39,6 +40,8 @@ class State:
         self.christmas_year: int | None = data.get("christmas_year")
         version = data.get("bot_version")
         self.bot_version: str | None = version if isinstance(version, str) else None
+        commands_hash = data.get("commands_hash")
+        self.commands_hash: str | None = commands_hash if isinstance(commands_hash, str) else None
 
     # -- loading / saving -------------------------------------------------
 
@@ -57,6 +60,7 @@ class State:
             "guilds": self.guilds,
             "christmas_year": self.christmas_year,
             "bot_version": self.bot_version,
+            "commands_hash": self.commands_hash,
         }
 
     def save(self) -> None:

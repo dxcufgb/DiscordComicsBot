@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import logging
 from datetime import datetime
 
@@ -20,6 +22,8 @@ log = logging.getLogger(__name__)
 
 CHRISTMAS_GIF = "https://tenor.com/view/merry-christmas-gif-church-gif-10346745427738870662"
 MAX_CONCURRENT_FETCHES = 4
+# Pauses before each retry of a failed slash command sync (seconds).
+SYNC_RETRY_DELAYS = (10, 30, 90)
 
 
 class ComicsBot(discord.Client):
@@ -62,11 +66,47 @@ class ComicsBot(discord.Client):
                 self.owner_ids = {info.owner.id}
 
         register_commands(self)
-        synced = await self.tree.sync()
-        log.info("Synced %d slash commands", len(synced))
+        # Every start (so every update, automatic or by an installer) syncs the commands of this version.
+        # In the background: a failed sync is retried for a few minutes and must not hold up the feeds.
+        self.run_in_background(self.sync_commands())
 
         self.poll_feeds.change_interval(seconds=self.config.interval)
         self.poll_feeds.start()
+
+    def commands_hash(self) -> str:
+        """Short fingerprint of the command definitions, to tell whether they changed since the last sync."""
+        body = [cmd.to_dict(self.tree) for cmd in self.tree.get_commands()]
+        return hashlib.sha256(json.dumps(body, sort_keys=True).encode()).hexdigest()[:16]
+
+    async def sync_commands(self, delays: tuple[float, ...] = SYNC_RETRY_DELAYS) -> bool:
+        """Sync the global slash commands, retrying failures. Never raises; returns whether it worked."""
+        for attempt in range(len(delays) + 1):
+            try:
+                synced = await self.tree.sync()
+                break
+            except Exception as exc:
+                if attempt == len(delays):
+                    log.error(
+                        "Could not sync the slash commands after %d attempts (%s); Discord keeps the previous "
+                        "set until the bot starts again",
+                        attempt + 1,
+                        exc,
+                    )
+                    return False
+                log.warning("Syncing the slash commands failed (%s); trying again in %g s", exc, delays[attempt])
+                await asyncio.sleep(delays[attempt])
+        digest = self.commands_hash()
+        changed = digest != self.state.commands_hash
+        if changed:
+            self.state.commands_hash = digest
+            self.state.save()
+        log.info("Synced %d slash commands%s", len(synced), " (changed since the last sync)" if changed else "")
+        if changed:
+            log.info(
+                "Discord clients keep the old command list until they are restarted (Ctrl+R on desktop, "
+                "or close and reopen the app)"
+            )
+        return True
 
     async def close(self) -> None:
         self.poll_feeds.cancel()
