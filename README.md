@@ -246,7 +246,7 @@ whole git history, `Code (Semgrep)` runs the Semgrep registry rules, `Dependenci
 gitleaks git --redact .
 semgrep scan --metrics=off --error --severity WARNING --severity ERROR \
   --config p/python --config p/javascript --config p/security-audit \
-  --config p/secrets --config p/github-actions --config p/bash
+  --config p/secrets --config p/github-actions --config r/bash
 pip-audit --strict -r requirements.txt
 pip-audit -r requirements-dev.txt
 ```
