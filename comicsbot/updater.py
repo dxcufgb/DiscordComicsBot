@@ -4,7 +4,8 @@
 
 Looks up the latest release of the private GitHub repository, and when it is newer than the
 installed version downloads this platform's archive (``comicsbot-X.Y.Z-linux.tar.gz`` or
-``comicsbot-X.Y.Z-windows.zip``), checks it against the release's ``SHA256SUMS.txt``,
+``comicsbot-X.Y.Z-windows.zip``, the name compared ignoring case: releases still use ``ComicsBot-X.Y.Z-...`` for
+the updaters of 2.3.2 and older), checks it against the release's ``SHA256SUMS.txt``,
 extracts it into a fresh temporary folder and runs that release's installer in upgrade mode
 (the same thing a manual upgrade does), which keeps ``.env``, ``state.json`` and the logs. If the
 installer fails, the previous program files are put back and, if the bot was running, it is restarted and
@@ -325,8 +326,22 @@ def archive_prefix(version: str) -> str:
     return f"{SLUG}-{version}"
 
 
+def archive_prefixes(version: str) -> tuple[str, ...]:
+    """Top folders an archive may have: ``comicsbot-X.Y.Z``, or ``ComicsBot-X.Y.Z`` as long as releases keep the
+    names of 2.3.2 and older for its updaters (GitHub file names are unique ignoring case, so not both)."""
+    return (archive_prefix(version), f"ComicsBot-{version}")
+
+
 def archive_name(version: str, platform: str) -> str:
     return f"{archive_prefix(version)}-" + ("windows.zip" if platform == "windows" else "linux.tar.gz")
+
+
+def find_asset(release: Release, name: str) -> str | None:
+    """The release file named ``name`` ignoring case (as GitHub compares them), or None."""
+    found = [asset for asset in release.assets if asset.casefold() == name.casefold()]
+    if len(found) > 1:
+        raise UpdateError(f"release {release.tag} has more than one file named {name} (ignoring case)")
+    return found[0] if found else None
 
 
 def asset_url(release: Release, name: str) -> str:
@@ -365,9 +380,16 @@ def download_asset(url: str, dest: Path, *, token: str, fetch: Fetch, max_bytes:
 # -- extraction ----------------------------------------------------------------
 
 
-def _member_path(name: str, prefix: str) -> PurePosixPath:
+def _member_path(name: str, prefixes: tuple[str, ...]) -> PurePosixPath:
     path = PurePosixPath(name)
-    if not name or "\\" in name or ":" in name or path.is_absolute() or ".." in path.parts or path.parts[0] != prefix:
+    if (
+        not name
+        or "\\" in name
+        or ":" in name
+        or path.is_absolute()
+        or ".." in path.parts
+        or path.parts[0] not in prefixes
+    ):
         raise UpdateError(f"unsafe path in the release archive: {name[:80]!r}")
     return path
 
@@ -375,11 +397,18 @@ def _member_path(name: str, prefix: str) -> PurePosixPath:
 def extract_release(archive: Path, dest: Path, version: str, platform: str) -> Path:
     """Extract the archive into the empty folder ``dest``; return the release folder inside it.
 
-    Only regular files and folders below ``comicsbot-<version>/`` are accepted (no links, devices,
-    absolute paths or ``..``), and the total size is capped.
+    Only regular files and folders below one top folder, ``comicsbot-<version>/`` or ``ComicsBot-<version>/``
+    (the same one for every member), are accepted (no links, devices, absolute paths or ``..``), and the total
+    size is capped.
     """
-    prefix = archive_prefix(version)
+    prefixes = archive_prefixes(version)
     total = 0
+
+    def member_path(name: str) -> PurePosixPath:
+        nonlocal prefixes
+        path = _member_path(name, prefixes)
+        prefixes = (path.parts[0],)  # the first member decides; all others must share it
+        return path
 
     def write(path: PurePosixPath, data: bytes, mode: int) -> None:
         nonlocal total
@@ -395,7 +424,7 @@ def extract_release(archive: Path, dest: Path, version: str, platform: str) -> P
     if platform == "windows":
         with zipfile.ZipFile(archive) as zf:
             for info in zf.infolist():
-                path = _member_path(info.filename.rstrip("/"), prefix)
+                path = member_path(info.filename.rstrip("/"))
                 if info.is_dir():
                     dest.joinpath(*path.parts).mkdir(parents=True, exist_ok=True)
                     continue
@@ -407,7 +436,7 @@ def extract_release(archive: Path, dest: Path, version: str, platform: str) -> P
 
         with tarfile.open(archive, "r:gz") as tar:
             for member in tar:
-                path = _member_path(member.name.rstrip("/"), prefix)
+                path = member_path(member.name.rstrip("/"))
                 if member.isdir():
                     dest.joinpath(*path.parts).mkdir(parents=True, exist_ok=True)
                     continue
@@ -419,6 +448,9 @@ def extract_release(archive: Path, dest: Path, version: str, platform: str) -> P
                 data = handle.read() if handle else b""
                 write(path, data, 0o755 if member.mode & 0o111 else 0o644)
 
+    if len(prefixes) != 1:
+        raise UpdateError("the release archive is empty")
+    prefix = prefixes[0]
     release_dir = dest / prefix
     installer = "install.ps1" if platform == "windows" else "install.sh"
     if not (release_dir / installer).is_file() or not (release_dir / "ComicsBot.py").is_file():
@@ -719,11 +751,13 @@ def update(
     if check_only:
         return EXIT_UPDATE_AVAILABLE
 
-    name = archive_name(release.version, platform)
-    missing = [asset for asset in (name, CHECKSUMS_ASSET) if asset not in release.assets]
-    if missing:
-        # Not an error: a release published by hand gets its files a few minutes later, and a release from before
-        # 2.3.2 or older has other names. Nothing is changed; the next run looks again.
+    wanted = archive_name(release.version, platform)
+    name = find_asset(release, wanted)
+    sums_name = find_asset(release, CHECKSUMS_ASSET)
+    missing = [asset for asset, found in ((wanted, name), (CHECKSUMS_ASSET, sums_name)) if found is None]
+    if missing or name is None or sums_name is None:
+        # Not an error: a release published by hand gets its files a few minutes later, and a release of 2.3.2 or
+        # older has no SHA256SUMS.txt. Nothing is changed; the next run looks again.
         log.warning(
             "Release %s has no %s (yet); not updating. Its files may still be being attached, or it uses file "
             "names of ComicsBot 2.3.2 and older; install it by hand if it stays like this",
@@ -732,7 +766,7 @@ def update(
         )
         return EXIT_OK
     archive_url = asset_url(release, name)
-    sums_url = asset_url(release, CHECKSUMS_ASSET)
+    sums_url = asset_url(release, sums_name)
     with tempfile.TemporaryDirectory(prefix="comicsbot-update-", ignore_cleanup_errors=True) as tmp:
         work = Path(tmp)
         sums = parse_checksums(

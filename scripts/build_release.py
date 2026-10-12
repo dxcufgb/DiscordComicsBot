@@ -7,17 +7,19 @@ The version comes from the release tag (the Release workflow passes it with ``--
 the built copy only: ``comicsbot/__init__.py`` and ``VERSION`` in the archives. Nobody bumps the version in the
 code. Without ``--version`` the repository's own ``__version__`` is used (local and CI builds).
 
-The first step writes, into the output folder:
+The first step writes, into the output folder (``V`` = ``VERSIONED_STEM`` below, ``ComicsBot`` for now):
 
-- ``comicsbot-X.Y.Z-linux.tar.gz``: one top folder ``comicsbot-X.Y.Z/`` with ``install.sh`` at its top
-- ``comicsbot-X.Y.Z-windows.zip``: the same for Windows (``install.bat`` / ``install.ps1``)
-- ``comicsbot-linux.tar.gz``, ``comicsbot-windows.zip``: the same files under fixed names
-- the legacy archives (``LEGACY_ASSETS`` below) and ``RELEASE_NOTES.md`` (also inside the archives: the bot
-  DMs it to server admins after a manual upgrade; the Release workflow puts it above the generated notes)
+- ``V-X.Y.Z-linux.tar.gz``: one top folder ``V-X.Y.Z/`` with ``install.sh`` at its top
+- ``V-X.Y.Z-windows.zip``: the same for Windows (``install.bat`` / ``install.ps1``)
+- ``comicsbot-linux.tar.gz``, ``comicsbot-windows.zip``: the same files under fixed names, with the top folder
+  ``comicsbot-X.Y.Z/``
+- ``RELEASE_NOTES.md`` (also inside the archives: the bot DMs it to server admins after a manual upgrade; the
+  Release workflow puts it above the generated notes)
 
-``scripts/build_setup.ps1`` then builds ``comicsbot-X.Y.Z-setup.exe`` on Windows, and ``--finish`` adds
-``comicsbot-setup.exe``, the legacy setup.exe, the legacy ``SHA256SUMS`` and ``SHA256SUMS.txt`` (``sha256sum``
-format, every other release file) and writes the list of files to attach to ``release-assets.txt``.
+``scripts/build_setup.ps1`` then builds ``V-X.Y.Z-setup.exe`` on Windows, and ``--finish`` adds
+``comicsbot-setup.exe``, the legacy ``SHA256SUMS`` and ``SHA256SUMS.txt`` (``sha256sum`` format, every other
+release file), checks that no two file names are equal ignoring case (GitHub refuses that), and writes the list of
+files to attach to ``release-assets.txt``.
 
 Only the files needed to install and run the bot are included (no tests, CI or development files), and
 building the same commit with the same version twice gives byte-identical archives.
@@ -58,20 +60,18 @@ ASSET_LIST = "release-assets.txt"
 CHECKSUMS = "SHA256SUMS.txt"
 
 # --- LEGACY_ASSETS -----------------------------------------------------------------------------------------
-# The file names of releases up to 2.3.2. Installations on those versions with automatic updates on look for
-# ComicsBot-X.Y.Z-linux.tar.gz / -windows.zip and SHA256SUMS, extract the archive by hand and accept only
-# files below a top folder named exactly "ComicsBot-X.Y.Z/" (comicsbot/updater.py at 2.3.2), then run the
-# install.sh / install.ps1 in it. So the legacy archives are built with that top folder (same files otherwise),
-# the legacy setup.exe is a byte-identical copy, and SHA256SUMS has today's three lines.
-# Remove this block (and its uses below, tests/test_legacy_update.py and tests/updater_2_3_2.py) once every
-# installation runs a version whose updater uses the new names (any release after 2.3.2).
-LEGACY_PREFIX = "ComicsBot-{version}"
-LEGACY_ARCHIVES = {
-    "linux": "ComicsBot-{version}-linux.tar.gz",
-    "windows": "ComicsBot-{version}-windows.zip",
-}
-LEGACY_SETUP = "ComicsBot-{version}-setup.exe"
-LEGACY_CHECKSUMS = "SHA256SUMS"  # sha256sum of the three files above, in this order
+# Installations on 2.3.2 and older with automatic updates on look for ComicsBot-X.Y.Z-linux.tar.gz /
+# -windows.zip and SHA256SUMS, extract the archive by hand, accept only files below a top folder named exactly
+# "ComicsBot-X.Y.Z/" (comicsbot/updater.py at 2.3.2, kept as tests/updater_2_3_2.py) and run the install.sh /
+# install.ps1 in it. GitHub release file names are unique ignoring case, so comicsbot-X.Y.Z-* and ComicsBot-X.Y.Z-*
+# cannot both be attached: while this block is in place the versioned files keep the old case ("ComicsBot",
+# also their top folder), and SHA256SUMS lists them as before. The fixed names (comicsbot-linux.tar.gz, ...) and
+# updaters after 2.3.2 do not care: those match the versioned names ignoring case and accept either top folder.
+# To drop it once every installation runs a release after 2.3.2: set VERSIONED_STEM = SLUG (lowercase names and
+# top folder), delete LEGACY_CHECKSUMS and its use in finish(), tests/test_legacy_update.py and
+# tests/updater_2_3_2.py.
+VERSIONED_STEM = "ComicsBot"
+LEGACY_CHECKSUMS = "SHA256SUMS"  # sha256sum of the three versioned files (linux, windows, setup.exe)
 # --- end of LEGACY_ASSETS ----------------------------------------------------------------------------------
 
 RELEASE_NOTES = """\
@@ -92,9 +92,9 @@ cd {slug}-{version}
 sudo ./install.sh
 ```
 
-**Windows**: download and run `{slug}-{version}-setup.exe`. Or extract `{slug}-{version}-windows.zip`
-and double-click `install.bat` (run it as administrator with `install.bat -AtStartup` to start the bot at boot
-instead of at logon). The setup is not code-signed, so Windows SmartScreen may ask you to confirm
+**Windows**: download and run `{slug}-setup.exe` (or `{stem}-{version}-setup.exe`, the same file). Or extract
+`{slug}-windows.zip` and double-click `install.bat` (run it as administrator with `install.bat -AtStartup` to start
+the bot at boot instead of at logon). The setup is not code-signed, so Windows SmartScreen may ask you to confirm
 ("More info" → "Run anyway").
 
 The installer sets up Python if needed, asks for the bot token, installs the dependencies and
@@ -205,36 +205,51 @@ def write_zip(path: Path, prefix: str, files: list[tuple[str, bytes]], mtime: in
 
 
 def archive_names(version: str) -> dict[str, str]:
-    return {"linux": f"{SLUG}-{version}-linux.tar.gz", "windows": f"{SLUG}-{version}-windows.zip"}
+    return {
+        "linux": f"{VERSIONED_STEM}-{version}-linux.tar.gz",
+        "windows": f"{VERSIONED_STEM}-{version}-windows.zip",
+    }
+
+
+def fixed_names() -> dict[str, str]:
+    """Names that never change, so releases/latest/download/<name> links keep working."""
+    return {"linux": f"{SLUG}-linux.tar.gz", "windows": f"{SLUG}-windows.zip", "setup": f"{SLUG}-setup.exe"}
 
 
 def setup_name(version: str) -> str:
-    return f"{SLUG}-{version}-setup.exe"
+    return f"{VERSIONED_STEM}-{version}-setup.exe"
+
+
+def check_unique_names(names: list[str]) -> None:
+    """GitHub refuses a release file whose name equals another one ignoring case."""
+    seen: dict[str, str] = {}
+    for name in names:
+        other = seen.setdefault(name.casefold(), name)
+        if other != name or names.count(name) > 1:
+            raise SystemExit(f"release file names {other!r} and {name!r} are equal ignoring case")
 
 
 def build(out_dir: Path, root: Path = ROOT, version: str | None = None) -> list[Path]:
-    """Build the archives (new, fixed and legacy names) and RELEASE_NOTES.md; return their paths."""
+    """Build the archives (versioned and fixed names) and RELEASE_NOTES.md; return their paths."""
     version = check_version(version) if version else package_version(root)
     out_dir.mkdir(parents=True, exist_ok=True)
     mtime = source_date_epoch(root)
-    notes_text = RELEASE_NOTES.format(version=version, slug=SLUG)
+    notes_text = RELEASE_NOTES.format(version=version, slug=SLUG, stem=VERSIONED_STEM)
     notes_file = ("RELEASE_NOTES.md", notes_text.encode())
     contents = {
         "linux": [*collect(root, "linux", version), ("VERSION", f"{version}\n".encode()), notes_file],
         "windows": [*collect(root, "windows", version), ("VERSION", f"{version}\r\n".encode()), notes_file],
     }
     writers = {"linux": write_tar, "windows": write_zip}
-    fixed = {"linux": f"{SLUG}-linux.tar.gz", "windows": f"{SLUG}-windows.zip"}
 
     built: list[Path] = []
     for platform, name in archive_names(version).items():
         path = out_dir / name
-        writers[platform](path, f"{SLUG}-{version}", contents[platform], mtime)
-        shutil.copyfile(path, out_dir / fixed[platform])
-        # LEGACY_ASSETS: the same files below the top folder that updaters up to 2.3.2 require.
-        legacy = out_dir / LEGACY_ARCHIVES[platform].format(version=version)
-        writers[platform](legacy, LEGACY_PREFIX.format(version=version), contents[platform], mtime)
-        built += [path, out_dir / fixed[platform], legacy]
+        writers[platform](path, f"{VERSIONED_STEM}-{version}", contents[platform], mtime)
+        fixed = out_dir / fixed_names()[platform]
+        writers[platform](fixed, f"{SLUG}-{version}", contents[platform], mtime)
+        built += [path, fixed]
+    check_unique_names([p.name for p in built])
 
     notes = out_dir / "RELEASE_NOTES.md"
     notes.write_text(notes_text, encoding="utf-8")
@@ -246,36 +261,25 @@ def sha256(path: Path) -> str:
 
 
 def finish(out_dir: Path, version: str) -> list[Path]:
-    """Add the setup.exe copies and the checksum files; return every file to attach to the release."""
+    """Add the setup.exe copy and the checksum files; return every file to attach to the release."""
     version = check_version(version)
-    setup = out_dir / setup_name(version)
-    archives = [out_dir / name for name in archive_names(version).values()]
-    for path in [*archives, setup]:
+    versioned = [*(out_dir / name for name in archive_names(version).values()), out_dir / setup_name(version)]
+    fixed = [out_dir / name for name in fixed_names().values()]
+    for path in [*versioned, *fixed[:2]]:
         if not path.is_file():
             raise SystemExit(f"missing {path}: build the archives (and the setup.exe) first")
-    shutil.copyfile(setup, out_dir / f"{SLUG}-setup.exe")
-    assets = [
-        *archives,
-        setup,
-        out_dir / f"{SLUG}-linux.tar.gz",
-        out_dir / f"{SLUG}-windows.zip",
-        out_dir / f"{SLUG}-setup.exe",
-    ]
+    shutil.copyfile(versioned[2], fixed[2])
+    assets = [*versioned, *fixed]
 
-    # LEGACY_ASSETS: today's names and today's SHA256SUMS (linux, windows, setup.exe).
-    legacy_setup = out_dir / LEGACY_SETUP.format(version=version)
-    shutil.copyfile(setup, legacy_setup)
-    legacy = [*(out_dir / LEGACY_ARCHIVES[p].format(version=version) for p in ("linux", "windows")), legacy_setup]
-    for path in legacy:
-        if not path.is_file():
-            raise SystemExit(f"missing {path}: build the archives first")
+    # LEGACY_ASSETS: SHA256SUMS as up to 2.3.2 (the three versioned files).
     legacy_sums = out_dir / LEGACY_CHECKSUMS
-    legacy_sums.write_text("".join(f"{sha256(p)}  {p.name}\n" for p in legacy), encoding="utf-8")
-    assets += [*legacy, legacy_sums]
+    legacy_sums.write_text("".join(f"{sha256(p)}  {p.name}\n" for p in versioned), encoding="utf-8")
+    assets.append(legacy_sums)
 
     sums = out_dir / CHECKSUMS
     sums.write_text("".join(f"{sha256(p)}  {p.name}\n" for p in assets), encoding="utf-8")
     assets.append(sums)
+    check_unique_names([p.name for p in assets])
     (out_dir / ASSET_LIST).write_text("".join(f"{p.name}\n" for p in assets), encoding="utf-8")
     return assets
 

@@ -1,8 +1,10 @@
 """Installations on 2.3.2 or older update with their own updater, which knows only the old file names.
 
 tests/updater_2_3_2.py is comicsbot/updater.py exactly as released in 2.3.2. It must be able to update to a
-release built today from the legacy files (LEGACY_ASSETS in scripts/build_release.py): ComicsBot-X.Y.Z-*.tar.gz /
--windows.zip with the top folder ComicsBot-X.Y.Z/, and SHA256SUMS. Delete this test, tests/updater_2_3_2.py and
+release built today (LEGACY_ASSETS in scripts/build_release.py): the versioned files keep the names
+ComicsBot-X.Y.Z-*.tar.gz / -windows.zip with the top folder ComicsBot-X.Y.Z/, and SHA256SUMS. The tests run against
+exactly the files the Release workflow attaches (build + finish), and check GitHub would accept them (no two names
+equal ignoring case). Delete this test, tests/updater_2_3_2.py and
 LEGACY_ASSETS together once no installation runs 2.3.2 or older.
 """
 
@@ -66,18 +68,24 @@ def test_the_2_3_2_updater_installs_the_legacy_files(tmp_path, release, platform
     assert 'CHECKSUMS_ASSET = "SHA256SUMS.txt"' in shipped["updater"]
 
 
-def test_legacy_archives_hold_the_same_files_as_the_new_ones(release):
+def test_published_names_are_unique_ignoring_case(release):
+    _, files = release
+    assert len({name.casefold() for name in files}) == len(files)
+
+
+def test_legacy_archives_hold_the_same_files_as_the_fixed_ones(release):
     out, _ = release
     with (
-        tarfile.open(out / f"comicsbot-{VERSION}-linux.tar.gz") as new,
+        tarfile.open(out / "comicsbot-linux.tar.gz") as new,
         tarfile.open(out / f"ComicsBot-{VERSION}-linux.tar.gz") as old,
     ):
         new_files = {m.name.split("/", 1)[1]: new.extractfile(m).read() for m in new if m.isfile()}
         old_files = {m.name.split("/", 1)[1]: old.extractfile(m).read() for m in old if m.isfile()}
         assert {m.name.split("/", 1)[0] for m in old} == {f"ComicsBot-{VERSION}"}
+        assert {m.name.split("/", 1)[0] for m in new} == {f"comicsbot-{VERSION}"}
     assert new_files == old_files
     with (
-        zipfile.ZipFile(out / f"comicsbot-{VERSION}-windows.zip") as new,
+        zipfile.ZipFile(out / "comicsbot-windows.zip") as new,
         zipfile.ZipFile(out / f"ComicsBot-{VERSION}-windows.zip") as old,
     ):
         assert {n.split("/", 1)[1]: new.read(n) for n in new.namelist()} == {
@@ -91,4 +99,20 @@ def test_legacy_checksums_have_todays_format(release):
     names = [f"ComicsBot-{VERSION}-linux.tar.gz", f"ComicsBot-{VERSION}-windows.zip", f"ComicsBot-{VERSION}-setup.exe"]
     expected = "".join(f"{hashlib.sha256(files[n]).hexdigest()}  {n}\n" for n in names)
     assert files["SHA256SUMS"].decode() == expected
-    assert files[f"ComicsBot-{VERSION}-setup.exe"] == files[f"comicsbot-{VERSION}-setup.exe"]
+    assert files[f"ComicsBot-{VERSION}-setup.exe"] == files["comicsbot-setup.exe"]
+
+
+@pytest.mark.parametrize("platform", ["linux", "windows"])
+def test_the_new_updater_installs_the_published_files(tmp_path, release, platform):
+    """The updater in this release finds the versioned files ignoring case and accepts the ComicsBot-X.Y.Z/ folder."""
+    from comicsbot import updater
+
+    _, files = release
+    install = make_install(tmp_path / "app", "2.3.2")
+    runner = FakeRunner(install)
+    github = FakeGitHub(f"v{VERSION}", files)
+    code = updater.update(install, TOKEN, platform=platform, fetch=github, runner=runner, backup_root=tmp_path / "b")
+    assert code == 0
+    installer = next(c for c in runner.commands[1] if c.endswith(("install.sh", "install.ps1")))
+    assert Path(installer).parent.name == f"ComicsBot-{VERSION}"
+    assert (install / "VERSION").read_text().strip() == VERSION

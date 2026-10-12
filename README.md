@@ -81,14 +81,14 @@ automatic updater runs the new release's `install.sh`, so automatic updates migr
 fails, the old updater puts the old program files back but not the old layout, so install the new release by hand
 (`sudo ./install.sh`) in that case.
 
-**Windows**: run `comicsbot-X.Y.Z-setup.exe` (or `comicsbot-setup.exe`, the same file). The wizard asks for the bot token and installs everything. Run it as
+**Windows**: run `comicsbot-setup.exe` (or `ComicsBot-X.Y.Z-setup.exe`, the same file). The wizard asks for the bot token and installs everything. Run it as
 administrator to get the option to start the bot when Windows starts, even if nobody logs in. The Start menu gets
 *Restart ComicsBot*, *ComicsBot log* and *ComicsBot settings (.env)* shortcuts, and the bot can be removed from
 *Settings → Apps*, which asks whether to keep the token and data. The setup is not code-signed, so SmartScreen may
 ask you to confirm (*More info → Run anyway*). Unattended: set `DISCORD_TOKEN` and run
-`comicsbot-X.Y.Z-setup.exe /VERYSILENT [/TASKS=startatboot]`.
+`comicsbot-setup.exe /VERYSILENT [/TASKS=startatboot]`.
 
-Prefer no installer? Extract `comicsbot-X.Y.Z-windows.zip` and double-click `install.bat` instead; it installs the
+Prefer no installer? Extract `comicsbot-windows.zip` and double-click `install.bat` instead; it installs the
 same way (`install.bat -AtStartup` as administrator to start at boot) and is managed with `install.bat -Restart`,
 `-Stop` or `-Uninstall`. Both install into `%LOCALAPPDATA%\ComicsBot` and can upgrade each other.
 
@@ -113,7 +113,8 @@ a manual upgrade does (the release's own installer), so `.env`, `state.json`, th
 How it works: the updater (`comicsbot/updater.py`, Python standard library only) asks
 `https://api.github.com/repos/dxcufgb/DiscordComicsBot/releases/latest` for the latest published release (drafts and
 pre-releases are ignored) and does nothing unless its version is newer than the installed one. Otherwise it downloads
-this system's archive (`comicsbot-X.Y.Z-linux.tar.gz` or `-windows.zip`) and checks it against the release's
+this system's archive (`comicsbot-X.Y.Z-linux.tar.gz` or `-windows.zip`, name compared ignoring case; for now it is
+`ComicsBot-X.Y.Z-...`, see below) and checks it against the release's
 `SHA256SUMS.txt`, extracts it into a new temporary folder and runs its installer. A latest release without these
 files (published by hand and its files not attached yet, or one that only has the old names) is reported in the log
 and left alone; the next run looks again. If the installer fails (for example the
@@ -163,10 +164,13 @@ without a logon too; that needs administrator rights, also for `install.bat -Ena
 Unattended Windows setup: set `COMICSBOT_GITHUB_TOKEN` and add `autoupdate` to `/TASKS`.
 
 Automatic updates work from the first release that includes the updater; install that one by hand.
-Releases up to 2.3.2 named their files `ComicsBot-X.Y.Z-linux.tar.gz`, `-windows.zip`, `-setup.exe` and `SHA256SUMS`.
-Their updaters look for those names, so every release also carries them (the same programs; see `LEGACY_ASSETS` in
-`scripts/build_release.py`): an installation on 2.3.2 updates to the next release, whose installer puts in the new
-updater, and from then on it uses the new names.
+Releases up to 2.3.2 named their files `ComicsBot-X.Y.Z-linux.tar.gz`, `-windows.zip`, `-setup.exe` and `SHA256SUMS`,
+and their updaters need exactly those names and the top folder `ComicsBot-X.Y.Z/`. GitHub treats file names that
+differ only in case as the same, so a release cannot carry both `comicsbot-X.Y.Z-*` and `ComicsBot-X.Y.Z-*`: for now
+the versioned files keep the old case (see `LEGACY_ASSETS` in `scripts/build_release.py`). An installation on 2.3.2
+updates to the next release, whose installer puts in the new updater; that one finds the versioned files ignoring
+case and accepts the top folder `comicsbot-X.Y.Z/` or `ComicsBot-X.Y.Z/`, so a later release can switch to lowercase
+names without breaking it.
 
 ### Update notices to server admins
 
@@ -247,12 +251,17 @@ files and adds the instructions). The files:
 
 | File | What |
 |---|---|
-| `comicsbot-X.Y.Z-linux.tar.gz` | Linux archive; one top folder `comicsbot-X.Y.Z/` with `install.sh` at its top |
-| `comicsbot-X.Y.Z-windows.zip` | Windows archive (`install.bat`) |
-| `comicsbot-X.Y.Z-setup.exe` | Windows setup wizard |
-| `comicsbot-linux.tar.gz`, `comicsbot-windows.zip`, `comicsbot-setup.exe` | the same under fixed names, so `releases/latest/download/<name>` links never change |
+| `ComicsBot-X.Y.Z-linux.tar.gz` | Linux archive; one top folder `ComicsBot-X.Y.Z/` with `install.sh` at its top |
+| `ComicsBot-X.Y.Z-windows.zip` | Windows archive (`install.bat`) |
+| `ComicsBot-X.Y.Z-setup.exe` | Windows setup wizard |
+| `comicsbot-linux.tar.gz`, `comicsbot-windows.zip`, `comicsbot-setup.exe` | the same under fixed names (top folder `comicsbot-X.Y.Z/`), so `releases/latest/download/<name>` links never change |
+| `SHA256SUMS` | checksums of the three versioned files, as up to 2.3.2 |
 | `SHA256SUMS.txt` | `sha256sum` checksums of every other file |
-| `ComicsBot-X.Y.Z-linux.tar.gz`, `-windows.zip`, `-setup.exe`, `SHA256SUMS` | the names updaters up to 2.3.2 look for (top folder `ComicsBot-X.Y.Z/`), until no installation runs those |
+
+The versioned names keep the case of 2.3.2 (`ComicsBot-`) while installations on 2.3.2 or older may still update:
+their updater needs exactly those names, and GitHub refuses two file names that differ only in case, so
+`comicsbot-X.Y.Z-*` cannot be attached as well (the build fails if two names would clash). Once no installation runs
+2.3.2 or older, `LEGACY_ASSETS` goes: the versioned names and their top folder become lowercase `comicsbot-X.Y.Z`.
 
 To inspect the files locally, run `python scripts/build_release.py --version 9.9.9`; they're written to `dist/`, and
 the same commit and version always build byte-identical archives.

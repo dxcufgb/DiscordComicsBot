@@ -1,10 +1,12 @@
 <#
 .SYNOPSIS
-    Builds comicsbot-<version>-setup.exe with Inno Setup from the Windows release zip.
+    Builds <stem>-<version>-setup.exe with Inno Setup from the versioned Windows release zip.
 
 .DESCRIPTION
-    Run scripts/build_release.py first; this script expands its comicsbot-<version>-windows.zip and
-    compiles packaging/windows/ComicsBot.iss into the same output folder. The version is the one stamped
+    Run scripts/build_release.py first; this script expands its <stem>-<version>-windows.zip and
+    compiles packaging/windows/ComicsBot.iss into <stem>-<version>-setup.exe in the same output folder.
+    <stem> is ComicsBot while the release keeps the file names of 2.3.2 for older updaters (LEGACY_ASSETS in
+    build_release.py), comicsbot afterwards. The version is the one stamped
     into the zip (build_release.py --version, from the release tag). Inno Setup 6 is used from PATH or its
     default folder, and installed with Chocolatey when it is missing.
 
@@ -19,11 +21,14 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
 $distDir = if ([IO.Path]::IsPathRooted($OutDir)) { $OutDir } else { Join-Path $root $OutDir }
 
-# Case-sensitive: the folder also holds the legacy ComicsBot-<version>-windows.zip and comicsbot-windows.zip.
-$zips = @(Get-ChildItem $distDir -Filter '*-windows.zip' | Where-Object { $_.Name -cmatch '^comicsbot-\d.*-windows\.zip$' })
-if ($zips.Count -ne 1) { throw "Expected one comicsbot-<version>-windows.zip in $distDir; run scripts/build_release.py first." }
+# The versioned zip (not the fixed-name comicsbot-windows.zip); its name gives the stem and the version.
+$pattern = '^(?<stem>comicsbot|ComicsBot)-(?<version>\d[^\\/]*)-windows\.zip$'
+$zips = @(Get-ChildItem $distDir -Filter '*-windows.zip' | Where-Object { $_.Name -cmatch $pattern })
+if ($zips.Count -ne 1) { throw "Expected one <stem>-<version>-windows.zip in $distDir; run scripts/build_release.py first." }
 $zip = $zips[0]
-$version = $zip.Name -creplace '^comicsbot-(.+)-windows\.zip$', '$1'
+$null = $zip.Name -cmatch $pattern
+$stem = $Matches['stem']
+$version = $Matches['version']
 
 $iscc = (Get-Command iscc.exe -ErrorAction SilentlyContinue).Source
 if (-not $iscc) {
@@ -39,9 +44,11 @@ if (-not $iscc) {
 $staging = Join-Path ([IO.Path]::GetTempPath()) "comicsbot-setup-$version"
 Remove-Item $staging -Recurse -Force -ErrorAction SilentlyContinue
 Expand-Archive $zip.FullName -DestinationPath $staging
-$source = Join-Path $staging "comicsbot-$version"
+$source = Join-Path $staging "$stem-$version"
+$outputBase = "$stem-$version-setup"
 
-& $iscc /Q "/DAppVersion=$version" "/DSourceDir=$source" "/O$distDir" (Join-Path $root 'packaging\windows\ComicsBot.iss')
+& $iscc /Q "/DAppVersion=$version" "/DSourceDir=$source" "/DOutputBase=$outputBase" "/O$distDir" `
+    (Join-Path $root 'packaging\windows\ComicsBot.iss')
 if ($LASTEXITCODE -ne 0) { throw "ISCC failed with exit code $LASTEXITCODE" }
 Remove-Item $staging -Recurse -Force
-Get-Item (Join-Path $distDir "comicsbot-$version-setup.exe")
+Get-Item (Join-Path $distDir "$outputBase.exe")

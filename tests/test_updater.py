@@ -88,6 +88,11 @@ def release_files(tmp_path_factory):
     return {p.name: p.read_bytes() for p in build_release.finish(out, __version__)}
 
 
+def published(platform, version=__version__):
+    """The versioned archive's name as the release has it (ComicsBot-X.Y.Z-... while LEGACY_ASSETS is in place)."""
+    return build_release.archive_names(version)[platform]
+
+
 def make_install(path, version="2.1.0"):
     (path / "comicsbot").mkdir(parents=True)
     (path / "comicsbot" / "__init__.py").write_text(f'__version__ = "{version}"\n')
@@ -147,7 +152,7 @@ def test_checksums_parsing():
 
 
 def test_token_only_goes_to_the_api_and_redirects_are_followed_without_it(release_files):
-    name = f"comicsbot-{__version__}-linux.tar.gz"
+    name = published("linux")
     github = FakeGitHub(f"v{__version__}", release_files)
     release = updater.latest_release(TOKEN, github)
     data = updater.get_bytes(
@@ -233,12 +238,16 @@ def test_asset_urls_must_point_at_this_repository():
 
 
 @pytest.mark.parametrize("platform", ["linux", "windows"])
-def test_extracts_the_real_release_archive(tmp_path, release_files, platform):
-    name = updater.archive_name(__version__, platform)
+@pytest.mark.parametrize("which", ["versioned", "fixed"])
+def test_extracts_the_real_release_archive(tmp_path, release_files, platform, which):
+    name = published(platform) if which == "versioned" else build_release.fixed_names()[platform]
     (tmp_path / name).write_bytes(release_files[name])
     dest = tmp_path / "out"
     dest.mkdir()
     release_dir = updater.extract_release(tmp_path / name, dest, __version__, platform)
+    # Either top folder is accepted: ComicsBot-X.Y.Z (versioned, while legacy names are kept) or comicsbot-X.Y.Z.
+    top = f"{build_release.VERSIONED_STEM if which == 'versioned' else 'comicsbot'}-{__version__}"
+    assert release_dir == dest / top
     assert (release_dir / "comicsbot" / "updater.py").is_file()
     if platform == "linux":
         assert (release_dir / "install.sh").stat().st_mode & 0o111
@@ -258,7 +267,8 @@ def _tar(path, members):
         "/etc/passwd",
         "Other-2.3.0/install.sh",
         "comicsbot-2.3.0/a\\..\\b",
-        "ComicsBot-2.3.0/install.sh",  # the top folder of the legacy archives
+        "Comicsbot-2.3.0/install.sh",  # only comicsbot-X.Y.Z or ComicsBot-X.Y.Z, exactly
+        "comicsbot-2.3.1/install.sh",  # another version
     ],
 )
 def test_unsafe_tar_paths_are_refused(tmp_path, member):
@@ -287,6 +297,46 @@ def test_unsafe_zip_paths_are_refused(tmp_path):
     (tmp_path / "out").mkdir()
     with pytest.raises(UpdateError, match="unsafe path"):
         updater.extract_release(tmp_path / "a.zip", tmp_path / "out", "2.3.0", "windows")
+
+
+def test_mixed_top_folders_are_refused(tmp_path):
+    members = []
+    for name in ("comicsbot-2.3.0/ComicsBot.py", "ComicsBot-2.3.0/install.sh"):
+        info = tarfile.TarInfo(name)
+        info.size = 1
+        members.append((info, b"x"))
+    _tar(tmp_path / "a.tar.gz", members)
+    (tmp_path / "out").mkdir()
+    with pytest.raises(UpdateError, match="unsafe path"):
+        updater.extract_release(tmp_path / "a.tar.gz", tmp_path / "out", "2.3.0", "linux")
+
+
+@pytest.mark.parametrize("top", ["comicsbot-2.3.0", "ComicsBot-2.3.0"])
+def test_either_top_folder_is_accepted(tmp_path, top):
+    members = []
+    for name, mode in (("ComicsBot.py", 0o644), ("install.sh", 0o755), ("VERSION", 0o644)):
+        data = b"2.3.0\n" if name == "VERSION" else b"x"
+        info = tarfile.TarInfo(f"{top}/{name}")
+        info.size, info.mode = len(data), mode
+        members.append((info, data))
+    _tar(tmp_path / "a.tar.gz", members)
+    (tmp_path / "out").mkdir()
+    assert updater.extract_release(tmp_path / "a.tar.gz", tmp_path / "out", "2.3.0", "linux") == tmp_path / "out" / top
+
+
+def test_empty_archive_is_refused(tmp_path):
+    _tar(tmp_path / "a.tar.gz", [])
+    (tmp_path / "out").mkdir()
+    with pytest.raises(UpdateError, match="empty"):
+        updater.extract_release(tmp_path / "a.tar.gz", tmp_path / "out", "2.3.0", "linux")
+
+
+@pytest.mark.parametrize("name", ["comicsbot-2.3.0-linux.tar.gz", "ComicsBot-2.3.0-linux.tar.gz"])
+def test_release_files_are_found_ignoring_case(name):
+    release = updater.Release("v2.3.0", "2.3.0", {name: f"{API}/releases/assets/1", "sha256sums.TXT": "x"})
+    assert updater.find_asset(release, "comicsbot-2.3.0-linux.tar.gz") == name
+    assert updater.find_asset(release, "SHA256SUMS.txt") == "sha256sums.TXT"
+    assert updater.find_asset(release, "comicsbot-2.3.0-windows.zip") is None
 
 
 def test_archive_without_installer_is_refused(tmp_path):
@@ -384,7 +434,7 @@ def test_check_only_up_to_date_is_zero(tmp_path, release_files):
 def test_release_without_new_style_files_is_left_alone(tmp_path, release_files, caplog, platform, missing):
     """A release of 2.3.2 or older (legacy names only) or one whose files are still being attached."""
     install = make_install(tmp_path / "app")
-    gone = updater.archive_name(__version__, platform) if missing == "archive" else "SHA256SUMS.txt"
+    gone = published(platform) if missing == "archive" else "SHA256SUMS.txt"
     files = {name: data for name, data in release_files.items() if name != gone}
     github = FakeGitHub(f"v{__version__}", files)
     runner = FakeRunner(install)
@@ -392,7 +442,7 @@ def test_release_without_new_style_files_is_left_alone(tmp_path, release_files, 
     assert updater.update(install, TOKEN, platform=platform, fetch=github, runner=runner) == 0
     assert runner.commands == []
     assert len(github.requests) == 1  # nothing downloaded
-    assert f"has no {gone}" in caplog.text
+    assert f"has no {updater.archive_name(__version__, platform) if missing == 'archive' else gone}" in caplog.text
     assert (install / "ComicsBot.py").read_text() == "old bot\n"
 
 
@@ -411,7 +461,7 @@ def test_update_runs_the_release_installer(tmp_path, release_files, caplog, plat
     if platform == "linux":
         assert command[-3:] == ["--dir", str(install), "--yes"]
         assert command[1] == f"PYTHON={sys.executable}"  # the Python check_root_safety checked
-        assert command[3].endswith(f"comicsbot-{__version__}/install.sh")
+        assert command[3].endswith(f"{build_release.VERSIONED_STEM}-{__version__}/install.sh")
     else:
         assert command[-4:] == ["-InstallDir", str(install), "-Yes", "-Unattended"]
         assert command[5].endswith("install.ps1")
@@ -433,7 +483,7 @@ def test_update_runs_the_release_installer(tmp_path, release_files, caplog, plat
 def test_checksum_mismatch_stops_before_installing(tmp_path, release_files):
     install = make_install(tmp_path / "app")
     files = dict(release_files)
-    name = f"comicsbot-{__version__}-linux.tar.gz"
+    name = published("linux")
     files[name] = files[name] + b"tampered"
     runner = FakeRunner(install)
     with pytest.raises(UpdateError, match="checksum mismatch"):
@@ -629,7 +679,7 @@ def test_updater_is_self_contained():
 def test_release_checksums_cover_the_archives(release_files):
     sums = updater.parse_checksums(release_files["SHA256SUMS.txt"].decode())
     for platform in ("linux", "windows"):
-        name = updater.archive_name(__version__, platform)
+        name = published(platform)
         assert sums[name] == hashlib.sha256(release_files[name]).hexdigest()
 
 
@@ -813,3 +863,22 @@ def test_main_checks_the_install_and_pythons_as_root(tmp_path, monkeypatch):
     seen.clear()
     assert updater.main(["--install-dir", str(install), "--token-file", str(token_file), "--platform", "windows"]) == 0
     assert seen == []
+
+
+@pytest.mark.parametrize("platform", ["linux", "windows"])
+def test_update_from_a_lowercase_only_release(tmp_path, monkeypatch, platform):
+    """Once LEGACY_ASSETS is dropped the versioned files are comicsbot-X.Y.Z-* with top folder comicsbot-X.Y.Z/."""
+    monkeypatch.setattr(build_release, "VERSIONED_STEM", build_release.SLUG)
+    out = tmp_path / "dist"
+    build_release.build(out)
+    (out / build_release.setup_name(__version__)).write_bytes(b"MZ setup")
+    files = {p.name: p.read_bytes() for p in build_release.finish(out, __version__)}
+    assert f"comicsbot-{__version__}-linux.tar.gz" in files
+    install = make_install(tmp_path / "app")
+    runner = FakeRunner(install)
+    github = FakeGitHub(f"v{__version__}", files)
+    assert (
+        updater.update(install, TOKEN, platform=platform, fetch=github, runner=runner, backup_root=tmp_path / "b") == 0
+    )
+    installer = next(c for c in runner.commands[1] if c.endswith(("install.sh", "install.ps1")))
+    assert Path(installer).parent.name == f"comicsbot-{__version__}"
