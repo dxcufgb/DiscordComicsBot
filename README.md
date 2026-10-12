@@ -16,17 +16,40 @@ A Discord bot that watches RSS/Atom feeds of web comics and posts new strips to 
 
 ### Install from a release (recommended)
 
-Download the archive for your system from the [Releases](../../releases) page. It contains only what is needed to run
-the bot. The installer installs Python 3.10+ if it is missing, asks for the bot token, installs the dependencies and
-starts the bot as a service that starts with the computer.
+The [Releases](../../releases) page has the files for each system. They contain only what is needed to run the bot.
+The installer installs Python 3.10+ if it is missing, asks for the bot token, installs the dependencies and starts the
+bot as a service that starts with the computer.
 
-**Linux** (any distribution with systemd):
+**Install on Linux** (any distribution with systemd):
 
 ```sh
-tar xzf ComicsBot-X.Y.Z-linux.tar.gz
-cd ComicsBot-X.Y.Z
+curl -fsSL https://raw.githubusercontent.com/dxcufgb/install/main/install.sh | sudo bash -s comicsbot
+```
+
+This repository is private, so it asks for a fine-grained token with read-only *Contents* access to this repository.
+Or download `comicsbot-linux.tar.gz` from the latest release, then:
+
+```sh
+tar xzf comicsbot-linux.tar.gz
+cd comicsbot-X.Y.Z
 sudo ./install.sh
 ```
+
+| Option | Meaning |
+|---|---|
+| (none) | install or upgrade in place, interactive (asks for what it needs) |
+| `--yes`, `-y` | non-interactive: no questions; missing required settings → clear error |
+| `--auto-update` / `--no-auto-update` | turn automatic updates on / off as part of this install |
+| `--enable-auto-update` / `--disable-auto-update` | turn them on / off on an existing install, nothing else |
+| `--check-update` | only check: exit 0 = up to date, 10 = newer release available, other = error |
+| `--update-now` | install the latest release now (same path as the daily updater) |
+| `--uninstall` [`--purge`] | remove (keep / also delete settings and data) |
+| `--help` | usage listing exactly these first, then the ComicsBot options below |
+
+ComicsBot options: `--dir DIR` (install location, default `/opt/comicsbot`), `--token TOKEN` (or `DISCORD_TOKEN`),
+`--migrate-from DIR` and `PYTHON=/path/to/python3.x` (see the table further down). The GitHub token for automatic
+updates is never an option: it is asked for, or read from `COMICSBOT_GITHUB_TOKEN`, or from `INSTALL_GITHUB_TOKEN`
+(the one-line installer sets it; an interactive install asks before reusing it for automatic updates).
 
 The bot is installed in `/opt/comicsbot` and runs as the system user `comicsbot`.
 Distributions older than Debian 12 / Ubuntu 22.04 ship a Python older than 3.10; upgrade the system, or install a
@@ -58,14 +81,14 @@ automatic updater runs the new release's `install.sh`, so automatic updates migr
 fails, the old updater puts the old program files back but not the old layout, so install the new release by hand
 (`sudo ./install.sh`) in that case.
 
-**Windows**: run `ComicsBot-X.Y.Z-setup.exe`. The wizard asks for the bot token and installs everything. Run it as
+**Windows**: run `comicsbot-X.Y.Z-setup.exe` (or `comicsbot-setup.exe`, the same file). The wizard asks for the bot token and installs everything. Run it as
 administrator to get the option to start the bot when Windows starts, even if nobody logs in. The Start menu gets
 *Restart ComicsBot*, *ComicsBot log* and *ComicsBot settings (.env)* shortcuts, and the bot can be removed from
 *Settings → Apps*, which asks whether to keep the token and data. The setup is not code-signed, so SmartScreen may
 ask you to confirm (*More info → Run anyway*). Unattended: set `DISCORD_TOKEN` and run
-`ComicsBot-X.Y.Z-setup.exe /VERYSILENT [/TASKS=startatboot]`.
+`comicsbot-X.Y.Z-setup.exe /VERYSILENT [/TASKS=startatboot]`.
 
-Prefer no installer? Extract `ComicsBot-X.Y.Z-windows.zip` and double-click `install.bat` instead; it installs the
+Prefer no installer? Extract `comicsbot-X.Y.Z-windows.zip` and double-click `install.bat` instead; it installs the
 same way (`install.bat -AtStartup` as administrator to start at boot) and is managed with `install.bat -Restart`,
 `-Stop` or `-Uninstall`. Both install into `%LOCALAPPDATA%\ComicsBot` and can upgrade each other.
 
@@ -90,8 +113,10 @@ a manual upgrade does (the release's own installer), so `.env`, `state.json`, th
 How it works: the updater (`comicsbot/updater.py`, Python standard library only) asks
 `https://api.github.com/repos/dxcufgb/DiscordComicsBot/releases/latest` for the latest published release (drafts and
 pre-releases are ignored) and does nothing unless its version is newer than the installed one. Otherwise it downloads
-this system's archive (`ComicsBot-X.Y.Z-linux.tar.gz` or `-windows.zip`) and checks it against the release's
-`SHA256SUMS`, extracts it into a new temporary folder and runs its installer. If the installer fails (for example the
+this system's archive (`comicsbot-X.Y.Z-linux.tar.gz` or `-windows.zip`) and checks it against the release's
+`SHA256SUMS.txt`, extracts it into a new temporary folder and runs its installer. A latest release without these
+files (published by hand and its files not attached yet, or one that only has the old names) is reported in the log
+and left alone; the next run looks again. If the installer fails (for example the
 new version does not log in to Discord within 30-45 seconds), the previous program files are put back and, if the
 bot was running before, the old version is restarted and checked again 15 seconds later. If that rollback fails too
 (the files cannot be put back, or the old version does not start), the updater logs `ROLLBACK FAILED: ...` with the
@@ -109,16 +134,17 @@ with code 3. Only one update runs at a time; downloads are HTTPS only, with time
 4. Pick an expiration date and generate it. When it expires, updates fail with "GitHub refused the request"; enable
    automatic updates again with a new token (it replaces the stored one).
 
-The installer asks for the token, or reads it from the `COMICSBOT_GITHUB_TOKEN` environment variable; it is never
-passed on the command line. It is stored apart from the bot's `.env` and sent only to `api.github.com` (the actual
+The installer asks for the token, or reads it from the `COMICSBOT_GITHUB_TOKEN` environment variable (on Linux also
+from `INSTALL_GITHUB_TOKEN`, which the one-line installer sets: used as is with `--yes`, after asking otherwise); it
+is never passed on the command line. It is stored apart from the bot's `.env` and sent only to `api.github.com` (the actual
 download is a redirect to GitHub's storage, which is fetched without it). It never appears in a log.
 
 | | Linux | Windows |
 |---|---|---|
-| Turn on while installing | `sudo ./install.sh --auto-update` (an interactive first install also asks) | Check *Install new ComicsBot releases automatically* in the setup, or `install.bat -EnableAutoUpdate` |
+| Turn on (off) while installing | `sudo ./install.sh --auto-update` (`--no-auto-update`; an interactive first install also asks) | Check *Install new ComicsBot releases automatically* in the setup, or `install.bat -EnableAutoUpdate` |
 | Turn on later | `sudo /opt/comicsbot/install.sh --enable-auto-update` | `install.bat -EnableAutoUpdate` in the install folder |
 | Turn off (deletes the token) | `sudo /opt/comicsbot/install.sh --disable-auto-update` | `install.bat -DisableAutoUpdate` |
-| Check only (tests the token) | `sudo /opt/comicsbot/install.sh --check-update` | `install.bat -CheckUpdate` |
+| Check only (tests the token; exit 0 = up to date, 10 = newer release available) | `sudo /opt/comicsbot/install.sh --check-update` | `install.bat -CheckUpdate` |
 | Update now | `sudo /opt/comicsbot/install.sh --update-now` | `install.bat -UpdateNow` |
 | Schedule | systemd timer `comicsbot-update.timer`, daily with up to 6 h random delay, runs missed checks after boot | Scheduled task `ComicsBot-Update`, daily between 04:00 and 08:00, or as soon as possible after that |
 | Runs as | root (it runs `install.sh`), in a hardened systemd service | the same Windows account as the bot (at logon, or without logon when the bot starts at boot) |
@@ -137,6 +163,10 @@ without a logon too; that needs administrator rights, also for `install.bat -Ena
 Unattended Windows setup: set `COMICSBOT_GITHUB_TOKEN` and add `autoupdate` to `/TASKS`.
 
 Automatic updates work from the first release that includes the updater; install that one by hand.
+Releases up to 2.3.2 named their files `ComicsBot-X.Y.Z-linux.tar.gz`, `-windows.zip`, `-setup.exe` and `SHA256SUMS`.
+Their updaters look for those names, so every release also carries them (the same programs; see `LEGACY_ASSETS` in
+`scripts/build_release.py`): an installation on 2.3.2 updates to the next release, whose installer puts in the new
+updater, and from then on it uses the new names.
 
 ### Update notices to server admins
 
@@ -202,23 +232,30 @@ pip install -r requirements-dev.txt
 ruff check . && ruff format --check . && pytest
 ```
 
-### Making a release
+### Releasing
 
-The version lives in `comicsbot/__init__.py` (`__version__`); `pyproject.toml` must match it (a test checks).
+**Actions → Release → Run workflow → type the version** (`1.2.3`; a leading `v` is dropped, `1.2.3-rc.1` makes a
+pre-release). Fallback: publish a release `vX.Y.Z` on GitHub; the files are attached afterwards. No version bump in
+the code: the version comes from the tag and is stamped into the built files only (`comicsbot/__init__.py` and
+`VERSION` in the archives); `__version__` in the repository is just the last release's version.
 
-1. Bump `__version__` in `comicsbot/__init__.py` and `version` in `pyproject.toml`, and merge to `main`.
-2. Publish, any of these ways:
-   - **Actions → Release → Run workflow** on `main`. This creates the tag `v<version>` and the release. It
-     refuses to run if that tag already exists, so a forgotten version bump can't overwrite a release.
-   - Push a tag yourself: `git tag v2.2.0 && git push origin v2.2.0`.
-   - Publish a release with a new `v<version>` tag on GitHub's Releases page.
+The Release workflow refuses a version whose tag or release already exists, runs the tests and the real-install CI
+jobs (`ci.yml`), builds the archives with `scripts/build_release.py --version X.Y.Z` and the Windows setup.exe with
+Inno Setup (`scripts/build_setup.ps1`, `packaging/windows/ComicsBot.iss`), and publishes the release with all files
+at once and install instructions above the generated changelog (for a release published by hand it attaches the
+files and adds the instructions). The files:
 
-The Release workflow runs the tests and the real-install CI jobs, builds the archives with `scripts/build_release.py`
-and the Windows `setup.exe` with Inno Setup (`scripts/build_setup.ps1`, `packaging/windows/ComicsBot.iss`), and
-publishes the release with all three, a `SHA256SUMS` file and install instructions above the generated changelog (it adds them to a
-release created on GitHub's website too). Versions with a hyphen (`2.2.0-rc1`) become pre-releases. To inspect the
-archives locally, run `python scripts/build_release.py`; they're written to `dist/`, and the same commit always
-builds byte-identical archives.
+| File | What |
+|---|---|
+| `comicsbot-X.Y.Z-linux.tar.gz` | Linux archive; one top folder `comicsbot-X.Y.Z/` with `install.sh` at its top |
+| `comicsbot-X.Y.Z-windows.zip` | Windows archive (`install.bat`) |
+| `comicsbot-X.Y.Z-setup.exe` | Windows setup wizard |
+| `comicsbot-linux.tar.gz`, `comicsbot-windows.zip`, `comicsbot-setup.exe` | the same under fixed names, so `releases/latest/download/<name>` links never change |
+| `SHA256SUMS.txt` | `sha256sum` checksums of every other file |
+| `ComicsBot-X.Y.Z-linux.tar.gz`, `-windows.zip`, `-setup.exe`, `SHA256SUMS` | the names updaters up to 2.3.2 look for (top folder `ComicsBot-X.Y.Z/`), until no installation runs those |
+
+To inspect the files locally, run `python scripts/build_release.py --version 9.9.9`; they're written to `dist/`, and
+the same commit and version always build byte-identical archives.
 
 ### Dependencies
 

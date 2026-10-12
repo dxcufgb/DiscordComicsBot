@@ -1,20 +1,23 @@
 ---
 name: release
-description: Bump the ComicsBot version consistently, verify, and open the bump PR
+description: Publish a ComicsBot release by running the Release workflow with a version
 disable-model-invocation: true
-argument-hint: <new-version e.g. 2.3.0>
+argument-hint: <version e.g. 2.4.0>
 ---
 
-Release flow: version lives in `comicsbot/__init__.py` (`__version__`) and must match
-`pyproject.toml`. Merging to main does NOT publish; the user clicks Actions -> Release -> "Run workflow".
+Releasing: **Actions → Release → Run workflow → type the version.** Fallback: publish a release `vX.Y.Z` on
+GitHub, files are attached afterwards. No version bump in the code: the workflow stamps the version from the tag
+into the built files only; never edit `__version__` or `pyproject.toml` for a release.
 
-1. Version = `$ARGUMENTS`. If empty, ask. It must be valid semver (hyphen suffix = pre-release).
+1. Version = `$ARGUMENTS` (a leading `v` is dropped). If empty, ask. It must match
+   `^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$`; a hyphen suffix makes a pre-release.
 2. Check it isn't already released or in flight:
    - `git ls-remote --tags origin "v<version>"` must be empty
-   - `gh pr list --state all --search "Bump version to <version>"` must show nothing open/merged
-   If either hits, stop and report (duplicate bump PRs #14/#16 happened before).
-3. Branch `release/<version>` from up-to-date main.
-4. Set the version in BOTH `comicsbot/__init__.py` and `pyproject.toml`.
-5. Run `ruff check .` and `pytest` (tests/test_release.py enforces the two versions match). Stop on failure.
-6. Commit "Bump version to <version>", push, `gh pr create`. Never enable auto-merge.
-7. Tell the user: after merge, run the Release workflow on main to tag `v<version>` and publish.
+   - `gh release view "v<version>"` must fail, and `gh run list --workflow release.yml --limit 5` must show no
+     Release run in progress
+   If any hits, stop and report.
+3. Make sure `main` has what should ship and its CI is green (`gh run list --branch main --limit 5`).
+4. Ask the user to confirm, then start it: `gh workflow run release.yml --ref main -f version=<version>`
+   (or tell the user: Actions → Release → Run workflow → type `<version>`).
+5. Report the run URL. The workflow runs the full CI, builds every file, creates the tag `v<version>` and publishes
+   the release (draft first, published once all files are attached). Nothing is published if any job fails.

@@ -19,6 +19,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          # The exact commit (when Release calls this workflow, not the movable tag).
+          ref: ${{ github.sha }}
           persist-credentials: false
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
@@ -39,11 +41,20 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          # The exact commit (when Release calls this workflow, not the movable tag).
+          ref: ${{ github.sha }}
           persist-credentials: false
       - name: Shellcheck
         run: shellcheck install.sh start-bot.sh .github/check-linux-layout.sh
       - name: Build release archives
         run: python3 scripts/build_release.py --out dist
+      - name: Installer help (no root needed)
+        run: |
+          ./install.sh --help | tee "$RUNNER_TEMP/help.txt"
+          for option in --yes --auto-update --no-auto-update --enable-auto-update --disable-auto-update \
+            --check-update --update-now --uninstall --purge --help; do
+            grep -q -- "$option" "$RUNNER_TEMP/help.txt"
+          done
       - name: Make /opt and the Python the installer uses root-only
         run: |
           # The runner image leaves /opt writable by the runner account; on a normal system only root can write it,
@@ -64,13 +75,14 @@ jobs:
           done
       - name: Install (systemd service)
         run: |
-          tar xzf dist/ComicsBot-*-linux.tar.gz -C "$RUNNER_TEMP"
-          cd "$RUNNER_TEMP"/ComicsBot-*/
+          tar xzf dist/comicsbot-*-linux.tar.gz -C "$RUNNER_TEMP"
+          cd "$RUNNER_TEMP"/comicsbot-*/
           # A non-empty folder that is not a ComicsBot install is refused and left alone.
           mkdir "$RUNNER_TEMP/other" && echo keep > "$RUNNER_TEMP/other/notes.txt"
           if sudo DISCORD_TOKEN=ci-fake-token ./install.sh --yes --dir "$RUNNER_TEMP/other"; then exit 1; fi
           test "$(ls -A "$RUNNER_TEMP/other")" = notes.txt
-          sudo DISCORD_TOKEN=ci-fake-token COMICSBOT_GITHUB_TOKEN=ci-fake-github-token ./install.sh --yes --auto-update \
+          # INSTALL_GITHUB_TOKEN is what the one-line installer passes on; with --yes it is used without asking.
+          sudo DISCORD_TOKEN=ci-fake-token INSTALL_GITHUB_TOKEN=ci-fake-github-token ./install.sh --yes --auto-update \
             || echo "installer exited with $? (expected: the bot can't log in with a fake token)"
           sudo systemd-analyze verify /etc/systemd/system/comicsbot.service \
             /etc/systemd/system/comicsbot-update.service /etc/systemd/system/comicsbot-update.timer
@@ -89,7 +101,7 @@ jobs:
           "$GITHUB_WORKSPACE"/.github/check-linux-layout.sh
       - name: Upgrade an install with the pre-2.3 layout
         run: |
-          cd "$RUNNER_TEMP"/ComicsBot-*/
+          cd "$RUNNER_TEMP"/comicsbot-*/
           # Turn the install back into the old layout: the bot's account owns everything, its data next to the
           # program files, and something of its own lying around.
           sudo systemctl stop comicsbot
@@ -109,10 +121,18 @@ jobs:
           test "$(sudo ls -A /opt/comicsbot/data)" = "$before"
       - name: Upgrade in place, then uninstall
         run: |
-          cd "$RUNNER_TEMP"/ComicsBot-*/
+          cd "$RUNNER_TEMP"/comicsbot-*/
           sudo ./install.sh --yes || true
           sudo grep -q "ci-fake-token" /opt/comicsbot/.env
           systemctl is-enabled comicsbot-update.timer  # the upgrade kept automatic updates on
+          # --no-auto-update turns them off as part of an upgrade; --enable-auto-update turns them on again.
+          sudo ./install.sh --yes --no-auto-update || true
+          if systemctl is-enabled --quiet comicsbot-update.timer; then echo "automatic updates still on"; exit 1; fi
+          test ! -e /usr/local/lib/comicsbot-updater
+          sudo test ! -e /etc/comicsbot/github-token
+          sudo COMICSBOT_GITHUB_TOKEN=ci-fake-github-token /opt/comicsbot/install.sh --enable-auto-update
+          systemctl is-enabled comicsbot-update.timer
+          test "$(sudo stat -c '%U:%G %a' /etc/comicsbot/github-token)" = "root:root 600"
           sudo /opt/comicsbot/install.sh --uninstall --purge
           test ! -e /opt/comicsbot
           test ! -e /etc/systemd/system/comicsbot.service
@@ -130,6 +150,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          # The exact commit (when Release calls this workflow, not the movable tag).
+          ref: ${{ github.sha }}
           persist-credentials: false
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
@@ -148,8 +170,10 @@ jobs:
       - name: Install (scheduled task)
         shell: pwsh
         run: |
-          Expand-Archive (Get-Item dist/ComicsBot-*-windows.zip) -DestinationPath $env:RUNNER_TEMP
-          $src = (Get-ChildItem $env:RUNNER_TEMP -Directory -Filter 'ComicsBot-*')[0].FullName
+          # -cmatch: Windows file names ignore case, and dist also holds the legacy ComicsBot-<version>-windows.zip.
+          $zip = Get-ChildItem dist -Filter '*-windows.zip' | Where-Object { $_.Name -cmatch '^comicsbot-\d.*-windows\.zip$' }
+          Expand-Archive $zip.FullName -DestinationPath $env:RUNNER_TEMP
+          $src = (Get-ChildItem $env:RUNNER_TEMP -Directory -Filter 'comicsbot-*')[0].FullName
           $env:DISCORD_TOKEN = 'ci-fake-token'
           $env:COMICSBOT_GITHUB_TOKEN = 'ci-fake-github-token'
           powershell -NoProfile -ExecutionPolicy Bypass -File "$src\install.ps1" -AtStartup -Yes -EnableAutoUpdate
@@ -182,7 +206,7 @@ jobs:
       - name: Upgrade in place, then uninstall
         shell: pwsh
         run: |
-          $src = (Get-ChildItem $env:RUNNER_TEMP -Directory -Filter 'ComicsBot-*')[0].FullName
+          $src = (Get-ChildItem $env:RUNNER_TEMP -Directory -Filter 'comicsbot-*')[0].FullName
           $dir = "$env:LOCALAPPDATA\ComicsBot"
           powershell -NoProfile -ExecutionPolicy Bypass -File "$src\install.ps1" -AtStartup -Yes
           if (-not (Select-String -Quiet -Path "$dir\.env" -Pattern 'ci-fake-token')) { throw 'settings lost on upgrade' }
@@ -193,7 +217,7 @@ jobs:
           if (Test-Path $dir) { throw 'install folder not removed' }
           exit 0
 
-  # Builds ComicsBot-<version>-setup.exe with Inno Setup and runs it unattended: install with the bot
+  # Builds comicsbot-<version>-setup.exe with Inno Setup and runs it unattended: install with the bot
   # starting at boot, check the result like the zip installer above, then uninstall with /PURGE.
   setup-windows:
     # A hung installer (e.g. waiting on a dialog) must fail fast instead of running for hours.
@@ -202,6 +226,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          # The exact commit (when Release calls this workflow, not the movable tag).
+          ref: ${{ github.sha }}
           persist-credentials: false
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
@@ -214,7 +240,7 @@ jobs:
       - name: Silent install
         shell: pwsh
         run: |
-          $setup = (Get-Item dist/ComicsBot-*-setup.exe).FullName
+          $setup = (Get-Item dist/comicsbot-*-setup.exe).FullName
           $env:DISCORD_TOKEN = 'ci-fake-token'
           $env:COMICSBOT_GITHUB_TOKEN = 'ci-fake-github-token'
           $setupArgs = '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/TASKS=startatboot,autoupdate', "/LOG=$env:RUNNER_TEMP\setup.log"

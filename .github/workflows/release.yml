@@ -1,124 +1,254 @@
 name: Release
 
-# Publishes the Linux archive, the Windows zip and the Windows setup.exe (Inno Setup).
-# The version always comes from comicsbot/__init__.py (__version__). Three ways to publish:
-#   * Actions tab -> Release -> "Run workflow" on main: creates the tag v<version> and the release.
-#   * Push a tag like v2.2.0 yourself; it must match comicsbot.__version__.
-#   * Publish a release with a new v<version> tag in the GitHub UI; the archives and install
-#     instructions are then added to it.
-# CI must pass first. Versions with a hyphen (2.2.0-rc1) become pre-releases.
+# How to release (no version bump in the code: the version comes from the tag and is stamped into the build):
+#   1. Actions -> Release -> Run workflow (on main) -> type the version, e.g. 1.2.3 (a leading "v" is dropped;
+#      1.2.3-rc.1 makes a pre-release). It runs the full CI, builds every file, creates the tag v1.2.3 on the
+#      tested commit and publishes the release with all files attached at once.
+#   2. Fallback: publish a release with a new tag v1.2.3 in the GitHub UI. The same CI and build run, and the
+#      files are attached to it afterwards (with the install instructions above its description).
+# Files: comicsbot-X.Y.Z-linux.tar.gz / -windows.zip / -setup.exe, the same under fixed names
+# (comicsbot-linux.tar.gz, ...), the legacy names older updaters look for (LEGACY_ASSETS in
+# scripts/build_release.py) and SHA256SUMS.txt.
 on:
-  push:
-    tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release, e.g. 1.2.3 (1.2.3-rc.1 makes a pre-release)"
+        required: true
+        type: string
+  release:
+    types: [published]
 
-permissions:
-  contents: read
+permissions: {}
 
 concurrency:
   group: release
   cancel-in-progress: false
 
 jobs:
-  test:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+    steps:
+      - name: Work out the version
+        id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          INPUT_VERSION: ${{ inputs.version }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          RELEASE_PRERELEASE: ${{ github.event.release.prerelease }}
+        run: |
+          pattern='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$'
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            version="${INPUT_VERSION#v}"
+            if [[ ! "$version" =~ $pattern ]]; then
+              echo "::error::'$INPUT_VERSION' is not a version like 1.2.3 or 1.2.3-rc.1."
+              exit 1
+            fi
+            if [[ "$GITHUB_REF" != "refs/heads/$DEFAULT_BRANCH" ]]; then
+              echo "::error::Run this workflow on the default branch $DEFAULT_BRANCH (got $GITHUB_REF)."
+              exit 1
+            fi
+            tag="v$version"
+            if gh api "repos/$REPO/git/ref/tags/$tag" > /dev/null 2>&1; then
+              echo "::error::The tag $tag already exists. Choose a new version."
+              exit 1
+            fi
+            # Published releases only; the publish job checks drafts too (seeing them needs write access).
+            if gh release view "$tag" --repo "$REPO" > /dev/null 2>&1; then
+              echo "::error::A release $tag already exists. Choose a new version."
+              exit 1
+            fi
+            prerelease=false
+            if [[ "$version" == *-* ]]; then prerelease=true; fi
+          else
+            tag="$RELEASE_TAG"
+            version="${tag#v}"
+            if [[ "$tag" != v* || ! "$version" =~ $pattern ]]; then
+              echo "::error::The release tag '$tag' is not v + a version like 1.2.3 or 1.2.3-rc.1."
+              exit 1
+            fi
+            prerelease="$RELEASE_PRERELEASE"
+          fi
+          {
+            echo "version=$version"
+            echo "tag=$tag"
+            echo "prerelease=$prerelease"
+          } >> "$GITHUB_OUTPUT"
+          echo "Releasing $tag (pre-release: $prerelease) from $GITHUB_SHA"
+
+  ci:
+    needs: prepare
+    permissions:
+      contents: read
     uses: ./.github/workflows/ci.yml
 
-  # Inno Setup only runs on Windows, so the setup.exe is built here and handed to the release job.
-  setup-exe:
-    needs: test
-    runs-on: windows-latest
+  build-linux:
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          # The exact commit this run is for (a release event's tag could be moved meanwhile).
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.15"
+      - name: Build the archives
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: python scripts/build_release.py --version "$VERSION" --out dist
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: archives
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/RELEASE_NOTES.md
+          if-no-files-found: error
+
+  # Inno Setup only runs on Windows, so the setup.exe is built here and handed to the publish job.
+  build-windows:
+    needs: prepare
+    runs-on: windows-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The exact commit this run is for (a release event's tag could be moved meanwhile).
+          ref: ${{ github.sha }}
           persist-credentials: false
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.15"
       - name: Build setup.exe
         shell: pwsh
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
         run: |
-          python scripts/build_release.py --out dist
+          python scripts/build_release.py --version $env:VERSION --out dist
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           ./scripts/build_setup.ps1 -OutDir dist
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: setup-exe
-          path: dist/*-setup.exe
+          path: dist/comicsbot-*-setup.exe
           if-no-files-found: error
 
-  release:
-    needs: [test, setup-exe]
+  publish:
+    needs: [prepare, ci, build-linux, build-windows]
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
-      contents: write
+      contents: write # create the tag and the release, upload its files
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          # The exact commit this run is for (a release event's tag could be moved meanwhile).
+          ref: ${{ github.sha }}
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          python-version: "3.15"
-      - name: Determine the tag
-        id: tag
-        env:
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          version="$(python -c 'import comicsbot; print(comicsbot.__version__)')"
-          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
-            if [[ "$GITHUB_REF" != "refs/heads/$DEFAULT_BRANCH" ]]; then
-              echo "::error::Run this workflow on the default branch (got $GITHUB_REF)."
-              exit 1
-            fi
-            tag="v$version"
-            if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" >/dev/null 2>&1; then
-              echo "::error::Tag $tag already exists. Bump the version in comicsbot/__init__.py and pyproject.toml first."
-              exit 1
-            fi
-          else
-            tag="$GITHUB_REF_NAME"
-          fi
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          echo "Releasing $tag from $GITHUB_SHA"
-      - name: Build archives
-        env:
-          TAG: ${{ steps.tag.outputs.tag }}
-        run: python scripts/build_release.py --expect-version "$TAG" --out dist
+          name: archives
+          path: dist
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: setup-exe
           path: dist
-      - name: Checksums for all downloads
-        working-directory: dist
-        run: |
-          test -f "ComicsBot-${TAG#v}-setup.exe"
-          sha256sum ComicsBot-*-linux.tar.gz ComicsBot-*-windows.zip ComicsBot-*-setup.exe > SHA256SUMS
-          cat SHA256SUMS
+      - name: Fixed-name copies, legacy files and checksums
         env:
-          TAG: ${{ steps.tag.outputs.tag }}
-      - name: Publish release
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          python3 scripts/build_release.py --version "$VERSION" --out dist --finish
+          cd dist
+          sha256sum --check SHA256SUMS.txt
+          sha256sum --check SHA256SUMS
+          cat release-assets.txt
+      - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ steps.tag.outputs.tag }}
+          REPO: ${{ github.repository }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          PRERELEASE: ${{ needs.prepare.outputs.prerelease }}
         run: |
-          files=(dist/*.tar.gz dist/*.zip dist/*-setup.exe dist/SHA256SUMS)
-          if gh release view "$TAG" > /dev/null 2>&1; then
-            # The release was created in the GitHub UI; attach the archives to it and put the
-            # install instructions above its description (once, so re-runs don't repeat them).
-            gh release upload "$TAG" "${files[@]}" --clobber
-            body="$(gh release view "$TAG" --json body --jq .body)"
-            if ! grep -q '^## Install' <<< "$body"; then
-              { cat dist/RELEASE_NOTES.md; echo; printf '%s\n' "$body"; } > dist/notes.md
-              gh release edit "$TAG" --notes-file dist/notes.md
+          mapfile -t names < dist/release-assets.txt
+          files=("${names[@]/#/dist/}")
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            # Checked again here: the tag may have appeared meanwhile, and draft releases are only visible
+            # with write access.
+            if gh api "repos/$REPO/git/ref/tags/$TAG" > /dev/null 2>&1; then
+              echo "::error::The tag $TAG already exists."
+              exit 1
+            fi
+            existing="$(gh api --paginate "repos/$REPO/releases" \
+              --jq ".[] | select(.tag_name == \"$TAG\" or .name == \"$TAG\") | .html_url")"
+            if [[ -n "$existing" ]]; then
+              echo "::error::A release (or draft) named $TAG already exists: $existing"
+              exit 1
+            fi
+            # Install instructions, then the generated changelog.
+            { cat dist/RELEASE_NOTES.md; echo
+              gh api "repos/$REPO/releases/generate-notes" -f tag_name="$TAG" -f target_commitish="$GITHUB_SHA" \
+                --jq .body; } > notes.md
+            # A draft with every file first, then published in one step: updaters never see a release
+            # without its files. The tag is created on the commit that was tested and built.
+            # If creating or publishing fails, delete what was created, but only while it is still a draft
+            # (never a published release), so the next run is not blocked by a leftover draft.
+            drop_draft() {
+              if [[ "$(gh release view "$TAG" --repo "$REPO" --json isDraft --jq .isDraft 2> /dev/null)" == "true" ]]; then
+                echo "::warning::Deleting the unpublished draft $TAG"
+                gh release delete "$TAG" --repo "$REPO" --yes
+              fi
+            }
+            if ! gh release create "$TAG" --repo "$REPO" --draft --target "$GITHUB_SHA" --title "$TAG" \
+              --notes-file notes.md "${files[@]}"; then
+              drop_draft
+              exit 1
+            fi
+            flags=(--latest)
+            if [[ "$PRERELEASE" == "true" ]]; then flags=(--prerelease); fi
+            if ! gh release edit "$TAG" --repo "$REPO" --draft=false "${flags[@]}"; then
+              drop_draft
+              exit 1
             fi
           else
-            flags=()
-            if [[ "$TAG" == *-* ]]; then flags+=(--prerelease); fi
-            if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
-              # Creates the tag on the commit that was tested and built.
-              flags+=(--target "$GITHUB_SHA")
-            else
-              flags+=(--verify-tag)
+            # The files were built from $GITHUB_SHA: refuse if the tag has been moved to another commit since.
+            tagged="$(gh api "repos/$REPO/commits/$TAG" --jq .sha)"
+            if [[ "$tagged" != "$GITHUB_SHA" ]]; then
+              echo "::error::The tag $TAG now points at $tagged, not at $GITHUB_SHA that was tested and built."
+              exit 1
             fi
-            gh release create "$TAG" "${files[@]}" --title "ComicsBot ${TAG#v}" \
-              --notes-file dist/RELEASE_NOTES.md --generate-notes "${flags[@]}"
+            # Published in the GitHub UI: attach the files and put the install instructions above its
+            # description (once, so re-runs don't repeat them).
+            gh release upload "$TAG" --repo "$REPO" --clobber "${files[@]}"
+            body="$(gh release view "$TAG" --repo "$REPO" --json body --jq .body)"
+            if ! grep -q '^## Install' <<< "$body"; then
+              { cat dist/RELEASE_NOTES.md; echo; printf '%s\n' "$body"; } > notes.md
+              gh release edit "$TAG" --repo "$REPO" --notes-file notes.md
+            fi
           fi
+          url="$(gh release view "$TAG" --repo "$REPO" --json url --jq .url)"
+          {
+            echo "### ComicsBot $TAG"
+            echo
+            echo "Release: $url (pre-release: $PRERELEASE, trigger: $GITHUB_EVENT_NAME, commit: $GITHUB_SHA)"
+            echo
+            echo '```'
+            cat dist/SHA256SUMS.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

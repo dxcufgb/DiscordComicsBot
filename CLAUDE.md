@@ -16,7 +16,9 @@ and Windows (scheduled task + Inno Setup wizard) installers.
 - `comicsbot/feeds.py` – fetching/parsing feeds and SSRF protection.
 - `comicsbot/updater.py` – opt-in auto-updater (stdlib only, self-contained: the installers run a copy of it
   outside the package; the GitHub token goes only to api.github.com and never to logs). Checks
-  `releases/latest`, requires `SHA256SUMS`, extracts by hand, backs up the program files, runs the release's
+  `releases/latest`, downloads `comicsbot-X.Y.Z-linux.tar.gz` / `-windows.zip` (top folder `comicsbot-X.Y.Z/`),
+  requires `SHA256SUMS.txt` (a release without them is logged and left alone), `--check` exits 10 when a newer
+  release exists. Extracts by hand, backs up the program files, runs the release's
   installer and rolls back on failure; a rollback that fails too logs "ROLLBACK FAILED" and keeps the backup.
 - `comicsbot/announce.py` – after an upgrade, DMs the release notes to server admins once (version in
   `state.json`, notes from the updater's `update-notice.json` or the bundled `RELEASE_NOTES.md`).
@@ -34,7 +36,23 @@ and Windows (scheduled task + Inno Setup wizard) installers.
 - `ruff check .` and `ruff format --check .` (line length 120; rules E, F, W, I, B, UP, ASYNC, S)
 - `pytest -q`
 - CI tests Python 3.10–3.14 and really installs, upgrades and uninstalls the bot on Linux and
-  Windows. `python scripts/build_release.py --out dist` builds the release archives.
+  Windows. `python scripts/build_release.py --version 9.9.9 --out dist` builds the release archives
+  (`--finish` adds the setup.exe copies and checksums once `scripts/build_setup.ps1` has built the setup.exe).
+
+## Install on Linux and releasing
+- **Install on Linux**:
+  `curl -fsSL https://raw.githubusercontent.com/dxcufgb/install/main/install.sh | sudo bash -s comicsbot`
+  (private repo: it asks for a fine-grained token with read-only *Contents* access to this repository), or
+  download `comicsbot-linux.tar.gz`, `tar xzf`, `cd comicsbot-X.Y.Z`, `sudo ./install.sh`. Common options:
+  `--yes`/`-y`, `--auto-update`/`--no-auto-update`, `--enable-auto-update`/`--disable-auto-update`,
+  `--check-update` (0 = up to date, 10 = newer release, other = error), `--update-now`, `--uninstall [--purge]`,
+  `--help`; `INSTALL_GITHUB_TOKEN` from the one-liner may become the updater token (asked first when interactive).
+- **Releasing**: Actions → Release → Run workflow → type the version. Fallback: publish a release `vX.Y.Z` on
+  GitHub, files are attached afterwards. No version bump in the code.
+- Release files: `comicsbot-X.Y.Z-linux.tar.gz` / `-windows.zip` / `-setup.exe`, fixed names `comicsbot-linux.tar.gz`
+  / `comicsbot-windows.zip` / `comicsbot-setup.exe`, `SHA256SUMS.txt`, plus `LEGACY_ASSETS` (scripts/build_release.py:
+  `ComicsBot-X.Y.Z-*` with top folder `ComicsBot-X.Y.Z/`, and `SHA256SUMS`) for the updaters of 2.3.2 and older;
+  `tests/test_legacy_update.py` runs the real 2.3.2 updater (`tests/updater_2_3_2.py`) against them.
 
 ## Conventions
 - `from __future__ import annotations` in every module; modern type hints; frozen dataclasses.
@@ -66,5 +84,6 @@ and Windows (scheduled task + Inno Setup wizard) installers.
   the token goes to `install.ps1` through an environment variable, never the command line;
   upgrades must keep the existing `.env`. Keep shell scripts shellcheck-clean and PowerShell
   scripts PSScriptAnalyzer-clean.
-- **Versions**: `comicsbot/__init__.py` `__version__` and `pyproject.toml` `version` must match
-  (the release build and `tests/test_release.py` enforce it).
+- **Versions**: the release version comes from the tag; `build_release.py --version` stamps it into the built
+  `comicsbot/__init__.py` and `VERSION` only. Never bump `__version__` / `pyproject.toml` for a release (they stay
+  the last release's version and must match each other, which `tests/test_release.py` checks).
