@@ -220,6 +220,11 @@ Only one copy of the bot can run from a folder at a time.
 
 Server admins can change who may use each command under **Server Settings → Integrations → ComicsBot**.
 
+The bot syncs these commands with Discord every time it starts, so every upgrade (by an installer or the updater)
+brings the new version's commands. A failed sync (Discord unreachable) is retried for a few minutes, and the log
+says whether the commands changed. If the old commands still show after an upgrade, restart the Discord client
+(Ctrl+R on desktop, or close and reopen the app): it keeps its cached list until then.
+
 ## Upgrading from 1.x
 
 The first start of 2.0 does this automatically:
