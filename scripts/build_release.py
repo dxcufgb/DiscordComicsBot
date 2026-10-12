@@ -268,6 +268,9 @@ def finish(out_dir: Path, version: str) -> list[Path]:
     for path in [*versioned, *fixed[:2]]:
         if not path.is_file():
             raise SystemExit(f"missing {path}: build the archives (and the setup.exe) first")
+    # Before writing anything: on Windows two names that differ only in case are the same file, so a copy would
+    # fail (or overwrite) before a later check could report the clash.
+    check_unique_names([p.name for p in [*versioned, *fixed]] + [LEGACY_CHECKSUMS, CHECKSUMS])
     shutil.copyfile(versioned[2], fixed[2])
     assets = [*versioned, *fixed]
 

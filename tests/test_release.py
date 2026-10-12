@@ -162,9 +162,11 @@ def test_finish_refuses_a_case_clash(tmp_path, monkeypatch):
     )
     build_release.build(tmp_path, version="9.9.9")
     (tmp_path / "ComicsBot-9.9.9-setup.exe").write_bytes(b"MZ setup")
+    before = sorted(p.name for p in tmp_path.iterdir())
     with pytest.raises(SystemExit, match="equal ignoring case"):
         build_release.finish(tmp_path, "9.9.9")
-    assert not (tmp_path / "release-assets.txt").exists()
+    # Refused before copying anything (on Windows the copy itself would fail, the names being the same file).
+    assert sorted(p.name for p in tmp_path.iterdir()) == before
 
 
 def test_lowercase_only_once_legacy_is_dropped(tmp_path, monkeypatch):
