@@ -3,12 +3,19 @@
     python -I updater.py --install-dir DIR --token-file FILE [--check] [--log-file FILE] [--lock-file FILE]
 
 Looks up the latest release of the private GitHub repository, and when it is newer than the
-installed version downloads this platform's archive, checks it against the release's SHA256SUMS,
+installed version downloads this platform's archive (``comicsbot-X.Y.Z-linux.tar.gz`` or
+``comicsbot-X.Y.Z-windows.zip``), checks it against the release's ``SHA256SUMS.txt``,
 extracts it into a fresh temporary folder and runs that release's installer in upgrade mode
 (the same thing a manual upgrade does), which keeps ``.env``, ``state.json`` and the logs. If the
 installer fails, the previous program files are put back and, if the bot was running, it is restarted and
 checked again after a short wait. If that rollback fails too, "ROLLBACK FAILED" is logged with the steps to
-recover by hand, the backup is kept (``--backup-dir``) and the exit code is 3.
+recover by hand, the backup is kept (``--backup-dir``) and the exit code is 3. With ``--check`` the exit
+code is 10 when a newer release is available and 0 when the installed version is the latest.
+
+A latest release without these files (one published by hand whose files are still being attached, or a
+release of 2.3.2 or older, which used other names) is reported and left alone: nothing is changed, and the
+next run tries again. Newer releases also carry the names the updaters of 2.3.2 and older look for (see
+``LEGACY_ASSETS`` in scripts/build_release.py), so those keep updating to them.
 
 It is started by the ``comicsbot-update`` systemd timer (Linux, as root) or the
 ``ComicsBot-Update`` scheduled task (Windows, as the account that runs the bot); see the README.
@@ -47,7 +54,9 @@ REPO = "dxcufgb/DiscordComicsBot"
 API_HOST = "api.github.com"
 LATEST_RELEASE_URL = f"https://{API_HOST}/repos/{REPO}/releases/latest"
 ASSET_URL_PREFIX = f"https://{API_HOST}/repos/{REPO}/releases/assets/"
-CHECKSUMS_ASSET = "SHA256SUMS"
+# Release file names: <SLUG>-X.Y.Z-linux.tar.gz / -windows.zip with one top folder <SLUG>-X.Y.Z/, and SHA256SUMS.txt.
+SLUG = "comicsbot"
+CHECKSUMS_ASSET = "SHA256SUMS.txt"
 USER_AGENT = "ComicsBot-updater"
 
 REQUEST_TIMEOUT = 60  # seconds, per request
@@ -85,12 +94,14 @@ PROGRAM_FILES = (
 )
 LINUX_PROGRAM_FILES = (*PROGRAM_FILES, ".venv")
 # Environment variables that must not reach the release installer.
-SECRET_VARIABLES = ("DISCORD_TOKEN", "COMICSBOT_GITHUB_TOKEN", "GITHUB_TOKEN", "GH_TOKEN")
+SECRET_VARIABLES = ("DISCORD_TOKEN", "COMICSBOT_GITHUB_TOKEN", "INSTALL_GITHUB_TOKEN", "GITHUB_TOKEN", "GH_TOKEN")
 
 EXIT_OK = 0
 EXIT_FAILED = 1
 # The update failed and so did putting the previous version back: the bot needs a hand.
 EXIT_ROLLBACK_FAILED = 3
+# --check: a newer release is available.
+EXIT_UPDATE_AVAILABLE = 10
 EXIT_BUSY = 73
 
 log = logging.getLogger("comicsbot.updater")
@@ -309,8 +320,13 @@ def current_platform() -> str:
     return "windows" if sys.platform == "win32" else "linux"
 
 
+def archive_prefix(version: str) -> str:
+    """The one top folder of a release archive."""
+    return f"{SLUG}-{version}"
+
+
 def archive_name(version: str, platform: str) -> str:
-    return f"ComicsBot-{version}-" + ("windows.zip" if platform == "windows" else "linux.tar.gz")
+    return f"{archive_prefix(version)}-" + ("windows.zip" if platform == "windows" else "linux.tar.gz")
 
 
 def asset_url(release: Release, name: str) -> str:
@@ -359,10 +375,10 @@ def _member_path(name: str, prefix: str) -> PurePosixPath:
 def extract_release(archive: Path, dest: Path, version: str, platform: str) -> Path:
     """Extract the archive into the empty folder ``dest``; return the release folder inside it.
 
-    Only regular files and folders below ``ComicsBot-<version>/`` are accepted (no links, devices,
+    Only regular files and folders below ``comicsbot-<version>/`` are accepted (no links, devices,
     absolute paths or ``..``), and the total size is capped.
     """
-    prefix = f"ComicsBot-{version}"
+    prefix = archive_prefix(version)
     total = 0
 
     def write(path: PurePosixPath, data: bytes, mode: int) -> None:
@@ -701,9 +717,20 @@ def update(
         return EXIT_OK
     log.info("ComicsBot %s is available (installed: %s)", release.version, installed)
     if check_only:
-        return EXIT_OK
+        return EXIT_UPDATE_AVAILABLE
 
     name = archive_name(release.version, platform)
+    missing = [asset for asset in (name, CHECKSUMS_ASSET) if asset not in release.assets]
+    if missing:
+        # Not an error: a release published by hand gets its files a few minutes later, and a release from before
+        # 2.3.2 or older has other names. Nothing is changed; the next run looks again.
+        log.warning(
+            "Release %s has no %s (yet); not updating. Its files may still be being attached, or it uses file "
+            "names of ComicsBot 2.3.2 and older; install it by hand if it stays like this",
+            release.tag,
+            " or ".join(missing),
+        )
+        return EXIT_OK
     archive_url = asset_url(release, name)
     sums_url = asset_url(release, CHECKSUMS_ASSET)
     with tempfile.TemporaryDirectory(prefix="comicsbot-update-", ignore_cleanup_errors=True) as tmp:
@@ -873,7 +900,11 @@ def main(argv: list[str] | None = None) -> int:
         type=Path,
         help="where the previous version is backed up during an update (default: backups next to the token file)",
     )
-    parser.add_argument("--check", action="store_true", help="only report whether an update is available")
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help=f"only report whether an update is available (exit code {EXIT_UPDATE_AVAILABLE} if it is, 0 if not)",
+    )
     parser.add_argument("--platform", choices=["linux", "windows"], default=current_platform(), help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
 

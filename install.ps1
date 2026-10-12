@@ -34,7 +34,8 @@
     install.bat -DisableAutoUpdate
     install.bat -CheckUpdate
     install.bat -UpdateNow
-    Turn automatic updates off, only check for a newer release, or update right now.
+    Turn automatic updates off, only check for a newer release (exit code 0: up to date, 10: a newer
+    release is available, other: the check failed), or update right now.
 #>
 [CmdletBinding()]
 param(
@@ -338,6 +339,10 @@ function Invoke-Updater([switch]$Check) {
     $arguments = Get-UpdaterArgumentList
     if ($Check) { $arguments += '--check' }
     $code = Invoke-Native $python $arguments -ShowOutput
+    if ($Check -and $code -eq 10) {
+        Write-Step 'A newer release is available (install.bat -UpdateNow installs it)'
+        exit 10
+    }
     if ($code -ne 0) { Stop-WithError "The updater failed (exit code $code); see $(Join-Path $UpdaterDir 'update.log')." }
 }
 

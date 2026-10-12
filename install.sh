@@ -1,29 +1,36 @@
 #!/usr/bin/env bash
-# ComicsBot installer for Linux (systemd). Run it from an extracted release archive:
+# ComicsBot installer for Linux (systemd). Run it as root from the extracted release folder:
 #
-#   sudo ./install.sh                        Install or upgrade, then start the service
-#   sudo ./install.sh --migrate-from DIR     Also copy .env and bot data from an older install
-#                                            (for example the git checkout you ran it from before)
-#   sudo ./install.sh --uninstall            Remove the service and program files, keep .env and data
-#   sudo ./install.sh --uninstall --purge    Remove everything, including data and the service user
+#   curl -fsSL https://raw.githubusercontent.com/dxcufgb/install/main/install.sh | sudo bash -s comicsbot
+#   or: tar xzf comicsbot-linux.tar.gz && cd comicsbot-X.Y.Z && sudo ./install.sh
+#
+# Options:
+#   (none)                  Install or upgrade in place, interactive (asks for what it needs)
+#   --yes, -y               Non-interactive: no questions; missing required settings are an error
+#   --auto-update           Turn automatic updates on as part of this install
+#   --no-auto-update        Turn automatic updates off as part of this install
+#   --enable-auto-update    Turn automatic updates on for the existing install, nothing else
+#   --disable-auto-update   Turn them off (and delete the GitHub token) for the existing install, nothing else
+#   --check-update          Only check: exit 0 = up to date, 10 = newer release available, other = error
+#   --update-now            Install the latest release now (same path as the daily updater)
+#   --uninstall [--purge]   Remove the bot (keep / also delete .env, the data and the service user)
+#   --help                  Show this help
+#
+# ComicsBot options:
+#   --dir DIR               Install location (default /opt/comicsbot; a folder only root can change)
+#   --token TOKEN           Discord bot token (or set DISCORD_TOKEN); asked for when missing
+#   --migrate-from DIR      Also copy .env and bot data from an older install
+#                           (for example the git checkout you ran it from before)
+#   PYTHON=/path            Use this Python 3.10+ instead of searching PATH (environment variable)
+#
+# Automatic updates (off unless turned on; see "Automatic updates" in README.md) download releases from the
+# private GitHub repository with a fine-grained token (Contents: Read-only). It is asked for, or read from
+# COMICSBOT_GITHUB_TOKEN, or from INSTALL_GITHUB_TOKEN (set by the one-line installer; an interactive install
+# asks before reusing it). It is never passed as an option and stored in /etc/comicsbot/github-token (root, 600).
 #
 # Layout: the program files (and .venv) belong to root and only root can change them; the bot runs as the
 # system user comicsbot and writes only to DIR/data (state.json, discord.log, bot.lock, ...). DIR/.env is
 # comicsbot:comicsbot mode 600. Upgrading an older install moves its data files into DIR/data.
-#
-# Automatic updates (off unless enabled; see "Automatic updates" in README.md):
-#   sudo ./install.sh --auto-update          Install or upgrade and turn on daily automatic updates
-#   sudo ./install.sh --enable-auto-update   Turn them on for the existing install
-#   sudo ./install.sh --disable-auto-update  Turn them off and delete the GitHub token
-#   sudo ./install.sh --check-update         Only report whether a newer release exists
-#   sudo ./install.sh --update-now           Update to the latest release now
-#   The GitHub token is asked for, or read from COMICSBOT_GITHUB_TOKEN (never pass it as an option).
-#
-# Options:
-#   --dir DIR       Install location (default /opt/comicsbot; a folder only root can change)
-#   --token TOKEN   Discord bot token (or set DISCORD_TOKEN); asked for when missing
-#   --yes           Do not ask before installing system packages
-#   PYTHON=/path    Use this Python 3.10+ instead of searching PATH (environment variable)
 set -euo pipefail
 # Program files must not be writable by group or others.
 umask 022
@@ -40,6 +47,8 @@ ACTION="install"
 PURGE=0
 AUTO_UPDATE=0
 UPDATE_TOKEN="${COMICSBOT_GITHUB_TOKEN:-}"
+# The token the one-line installer downloaded the release with; offered for automatic updates.
+INSTALL_TOKEN="${INSTALL_GITHUB_TOKEN:-}"
 GITHUB_REPO="dxcufgb/DiscordComicsBot"
 UPDATE_UNIT="comicsbot-update"
 UPDATER_DIR="/usr/local/lib/comicsbot-updater"
@@ -65,18 +74,33 @@ confirm() {
     read -r -p "$1 [Y/n] " answer
     [[ -z "$answer" || "$answer" =~ ^[Yy] ]]
 }
+# True when questions may be asked: no --yes, and someone at a terminal.
+interactive() {
+    [ "$ASSUME_YES" -eq 0 ] && [ -t 0 ]
+}
 # Like confirm, but the answer defaults to no and --yes does not mean yes.
 ask_no() {
-    [ "$ASSUME_YES" -eq 0 ] && [ -t 0 ] || return 1
+    interactive || return 1
     local answer
     read -r -p "$1 [y/N] " answer
     [[ "$answer" =~ ^[Yy] ]]
 }
 
+show_help() {
+    awk 'NR > 1 && !/^#/ { exit } NR > 1 { sub(/^# ?/, ""); print }' "$SCRIPT"
+}
+# --help works without root.
+for arg in "$@"; do
+    case "$arg" in
+        -h|--help) show_help; exit 0 ;;
+    esac
+done
+
 if [ "$(id -u)" -ne 0 ]; then
     command -v sudo > /dev/null || die "run this script as root"
-    exec sudo --preserve-env=DISCORD_TOKEN,COMICSBOT_GITHUB_TOKEN,PYTHON bash "$SCRIPT" "$@"
+    exec sudo --preserve-env=DISCORD_TOKEN,COMICSBOT_GITHUB_TOKEN,INSTALL_GITHUB_TOKEN,PYTHON bash "$SCRIPT" "$@"
 fi
+unset INSTALL_GITHUB_TOKEN
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -87,14 +111,19 @@ while [ $# -gt 0 ]; do
         --uninstall) ACTION="uninstall"; shift ;;
         --purge) PURGE=1; shift ;;
         --auto-update) AUTO_UPDATE=1; shift ;;
+        --no-auto-update) AUTO_UPDATE=-1; shift ;;
         --enable-auto-update) ACTION="enable-update"; shift ;;
         --disable-auto-update) ACTION="disable-update"; shift ;;
         --check-update) ACTION="check-update"; shift ;;
         --update-now) ACTION="update-now"; shift ;;
-        -h|--help) awk 'NR > 1 && !/^#/ { exit } NR > 1 { sub(/^# ?/, ""); print }' "$SCRIPT"; exit 0 ;;
+        -h|--help) show_help; exit 0 ;;
         *) die "unknown option: $1 (see --help)" ;;
     esac
 done
+# Started through a pipe (curl ... | sudo bash) but from a terminal: ask the questions there.
+if [ "$ASSUME_YES" -eq 0 ] && [ ! -t 0 ] && { true < /dev/tty; } 2> /dev/null; then
+    exec < /dev/tty
+fi
 INSTALL_DIR="$(readlink -m "$INSTALL_DIR")"
 DATA_DIR="$INSTALL_DIR/$DATA_DIR_NAME"
 [ "$INSTALL_DIR" != / ] || die "--dir / is not a valid install location"
@@ -365,11 +394,17 @@ auto_update_enabled() {
     [ -f "/etc/systemd/system/$UPDATE_UNIT.timer" ]
 }
 
-# Asks for the GitHub token unless one is stored already or given in COMICSBOT_GITHUB_TOKEN.
+# Asks for the GitHub token unless one is stored already or given in COMICSBOT_GITHUB_TOKEN. The one-line
+# installer's token (INSTALL_GITHUB_TOKEN) is used when nothing else is, after asking in an interactive install.
 need_update_token() {
     [ -n "$UPDATE_TOKEN" ] && return 0
     [ -s "$UPDATE_TOKEN_FILE" ] && return 0
-    if [ -t 0 ]; then
+    if [ -n "$INSTALL_TOKEN" ] && { ! interactive \
+        || confirm "Use the GitHub token you gave the installer for automatic updates too?"; }; then
+        UPDATE_TOKEN="$INSTALL_TOKEN"
+        return 0
+    fi
+    if interactive; then
         echo "Automatic updates download releases from the private GitHub repository $GITHUB_REPO."
         echo "Create a fine-grained token at https://github.com/settings/personal-access-tokens/new with"
         echo "access to only $GITHUB_REPO and the permission Contents: Read-only, and paste it here."
@@ -489,8 +524,11 @@ do_check_update() {
         die "automatic updates are not enabled; run: sudo $SCRIPT --enable-auto-update"
     fi
     ensure_python > /dev/null
+    # Exit code 0: up to date; 10: a newer release is available; anything else: the check failed.
+    local status=0
     "$PYTHON" -I "$UPDATER_DIR/updater.py" --install-dir "$INSTALL_DIR" --token-file "$UPDATE_TOKEN_FILE" \
-        --lock-file "$UPDATE_LOCK" --backup-dir "$UPDATE_BACKUPS" --check
+        --lock-file "$UPDATE_LOCK" --backup-dir "$UPDATE_BACKUPS" --check || status=$?
+    exit "$status"
 }
 
 do_update_now() {
@@ -516,7 +554,7 @@ do_install() {
         && { [ ! -f "$INSTALL_DIR/.env" ] || [ ! -d "$DATA_DIR" ]; } && [ -n "$(ls -A "$INSTALL_DIR")" ]; then
         die "$INSTALL_DIR is not empty and is not a ComicsBot install; choose an empty or new folder (the default /opt/comicsbot)"
     fi
-    if [ -z "$TOKEN" ] && [ ! -f "$INSTALL_DIR/.env" ] && [ ! -f "$MIGRATE_FROM/.env" ] && [ ! -t 0 ]; then
+    if [ -z "$TOKEN" ] && [ ! -f "$INSTALL_DIR/.env" ] && [ ! -f "$MIGRATE_FROM/.env" ] && ! interactive; then
         die "a bot token is required: pass --token or set DISCORD_TOKEN"
     fi
     # First interactive install: offer automatic updates. Upgrades keep whatever was chosen.
@@ -526,7 +564,7 @@ do_install() {
     fi
     [ "$AUTO_UPDATE" -eq 1 ] && need_update_token
     ensure_python
-    if [ "$AUTO_UPDATE" -eq 1 ] || auto_update_enabled; then
+    if [ "$AUTO_UPDATE" -eq 1 ] || { [ "$AUTO_UPDATE" -eq 0 ] && auto_update_enabled; }; then
         # Checked again in full once the program files are in place; fail before changing anything.
         local bad
         bad="$(changeable_chain "$(dirname "$INSTALL_DIR")")"
@@ -600,7 +638,7 @@ do_install() {
     fi
     if [ ! -f "$env_file" ]; then
         (umask 077 && cp "$INSTALL_DIR/.env.example" "$env_file")
-        if [ -z "$TOKEN" ] && [ -t 0 ]; then
+        if [ -z "$TOKEN" ] && interactive; then
             echo "Paste the bot token from https://discord.com/developers/applications (Bot -> Reset Token)."
             echo "On that Bot page, also turn on \"Server Members Intent\" (Privileged Gateway Intents) and save;"
             echo "without it update notices go to server owners only, not to all server admins."
@@ -652,6 +690,8 @@ do_install() {
     if [ "$AUTO_UPDATE" -eq 1 ]; then
         info "Setting up automatic updates"
         enable_auto_update
+    elif [ "$AUTO_UPDATE" -eq -1 ]; then
+        remove_updater
     elif auto_update_enabled; then
         info "Updating the automatic updater"
         install_updater

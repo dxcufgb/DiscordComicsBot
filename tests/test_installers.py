@@ -14,10 +14,44 @@ ISS = (ROOT / "packaging" / "windows" / "ComicsBot.iss").read_bytes()
 
 
 @pytest.mark.parametrize(
-    "option", ["--auto-update", "--enable-auto-update", "--disable-auto-update", "--check-update", "--update-now"]
+    "option",
+    [
+        "--auto-update",
+        "--no-auto-update",
+        "--enable-auto-update",
+        "--disable-auto-update",
+        "--check-update",
+        "--update-now",
+    ],
 )
 def test_install_sh_has_update_options(option):
     assert f"        {option})" in INSTALL_SH
+
+
+def test_install_sh_help_lists_the_common_options_first():
+    result = subprocess.run(["bash", str(ROOT / "install.sh"), "--help"], capture_output=True, text=True, check=True)
+    options = [line.split()[0] for line in result.stdout.splitlines() if line.startswith("  -") or "(none)" in line]
+    assert options[:10] == [
+        "(none)",
+        "--yes,",
+        "--auto-update",
+        "--no-auto-update",
+        "--enable-auto-update",
+        "--disable-auto-update",
+        "--check-update",
+        "--update-now",
+        "--uninstall",
+        "--help",
+    ]
+    assert "--dir" in options[10:]
+
+
+def test_install_sh_takes_the_one_liners_token_from_the_environment_only():
+    assert 'INSTALL_TOKEN="${INSTALL_GITHUB_TOKEN:-}"' in INSTALL_SH
+    assert "--preserve-env=DISCORD_TOKEN,COMICSBOT_GITHUB_TOKEN,INSTALL_GITHUB_TOKEN,PYTHON" in INSTALL_SH
+    # An interactive install asks before reusing it for automatic updates.
+    body = INSTALL_SH[INSTALL_SH.index("need_update_token() {") :]
+    assert body.index("! interactive") < body.index('UPDATE_TOKEN="$INSTALL_TOKEN"')
 
 
 def test_install_sh_never_takes_the_github_token_as_an_option():

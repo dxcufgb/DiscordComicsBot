@@ -1,4 +1,4 @@
-; Inno Setup script for the Windows installer (ComicsBot-<version>-setup.exe).
+; Inno Setup script for the Windows installer (comicsbot-<version>-setup.exe).
 ;
 ; Build it with scripts/build_setup.ps1, which runs:
 ;   iscc /DAppVersion=<version> /DSourceDir=<extracted windows zip> /O<output dir> ComicsBot.iss
@@ -9,7 +9,7 @@
 ; interchangeable and can upgrade each other.
 ;
 ; Unattended: set DISCORD_TOKEN, then run
-;   ComicsBot-<version>-setup.exe /VERYSILENT [/TASKS=startatboot]
+;   comicsbot-<version>-setup.exe /VERYSILENT [/TASKS=startatboot]
 ; and uninstall with unins000.exe /VERYSILENT [/PURGE].
 ; Add "autoupdate" to /TASKS (and set COMICSBOT_GITHUB_TOKEN) to turn on automatic updates. Leaving the
 ; task unchecked keeps the current setting; install.bat -DisableAutoUpdate turns them off.
@@ -18,7 +18,7 @@
   #define AppVersion "0.0.0"
 #endif
 #ifndef SourceDir
-  #error Pass /DSourceDir=<folder with the extracted ComicsBot-<version>-windows.zip>
+  #error Pass /DSourceDir=<folder with the extracted comicsbot-<version>-windows.zip>
 #endif
 
 [Setup]
@@ -38,7 +38,7 @@ PrivilegesRequired=lowest
 MinVersion=10.0
 ; Run as a 64-bit installer so {sys} is the 64-bit System32 (and the 64-bit PowerShell).
 ArchitecturesInstallIn64BitMode=x64compatible
-OutputBaseFilename=ComicsBot-{#AppVersion}-setup
+OutputBaseFilename=comicsbot-{#AppVersion}-setup
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
