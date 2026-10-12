@@ -236,6 +236,28 @@ pip install -r requirements-dev.txt
 ruff check . && ruff format --check . && pytest
 ```
 
+The **Security** workflow (`.github/workflows/security.yml`; GitHub's secret scanning and CodeQL are not available for
+this private repository) runs on every pull request, on pushes to `main` and weekly: `Secrets (gitleaks)` scans the
+whole git history, `Code (Semgrep)` runs the Semgrep registry rules, `Dependencies` runs pip-audit on
+`requirements.txt` and `requirements-dev.txt`. The same checks locally (gitleaks 8.30.1, semgrep 1.180.0, pip-audit
+2.10.1):
+
+```sh
+gitleaks git --redact --log-opts="--full-history --diff-filter=tuxdb --diff-merges=first-parent HEAD" .
+semgrep scan --metrics=off --error --severity WARNING --severity ERROR \
+  --config p/python --config p/javascript --config p/security-audit \
+  --config p/secrets --config p/github-actions --config r/bash
+pip-audit --strict -r requirements.txt
+pip-audit --strict -r requirements-dev.txt
+```
+
+Mark a Semgrep false positive with `# nosemgrep: <rule-id>` (Python, shell, YAML, PowerShell) on the matched line or
+the line immediately before it, with a reason. Mark a gitleaks false positive with a narrow, commented allowlist entry
+in `.gitleaks.toml`; the file must have `[extend]` with `useDefault = true` (the workflow checks this), or it would
+replace the default rules. Before scanning, the workflow checks that the pinned gitleaks, with that configuration,
+detects a token generated at run time; it scans only the checked-out commit's history (`HEAD`, merge commits against
+their first parent), not every branch.
+
 ### Releasing
 
 **Actions → Release → Run workflow → type the version** (`1.2.3`; a leading `v` is dropped, `1.2.3-rc.1` makes a
