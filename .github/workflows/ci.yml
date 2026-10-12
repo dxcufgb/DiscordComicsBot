@@ -75,7 +75,9 @@ jobs:
           done
       - name: Install (systemd service)
         run: |
-          tar xzf dist/comicsbot-*-linux.tar.gz -C "$RUNNER_TEMP"
+          # The fixed-name archive (top folder comicsbot-X.Y.Z/), as the README and the one-line installer use it.
+          # The versioned ComicsBot-X.Y.Z-linux.tar.gz holds the same files (tests/test_legacy_update.py).
+          tar xzf dist/comicsbot-linux.tar.gz -C "$RUNNER_TEMP"
           cd "$RUNNER_TEMP"/comicsbot-*/
           # A non-empty folder that is not a ComicsBot install is refused and left alone.
           mkdir "$RUNNER_TEMP/other" && echo keep > "$RUNNER_TEMP/other/notes.txt"
@@ -170,9 +172,8 @@ jobs:
       - name: Install (scheduled task)
         shell: pwsh
         run: |
-          # -cmatch: Windows file names ignore case, and dist also holds the legacy ComicsBot-<version>-windows.zip.
-          $zip = Get-ChildItem dist -Filter '*-windows.zip' | Where-Object { $_.Name -cmatch '^comicsbot-\d.*-windows\.zip$' }
-          Expand-Archive $zip.FullName -DestinationPath $env:RUNNER_TEMP
+          # The fixed-name zip (top folder comicsbot-X.Y.Z); the versioned one holds the same files.
+          Expand-Archive dist/comicsbot-windows.zip -DestinationPath $env:RUNNER_TEMP
           $src = (Get-ChildItem $env:RUNNER_TEMP -Directory -Filter 'comicsbot-*')[0].FullName
           $env:DISCORD_TOKEN = 'ci-fake-token'
           $env:COMICSBOT_GITHUB_TOKEN = 'ci-fake-github-token'
@@ -217,7 +218,7 @@ jobs:
           if (Test-Path $dir) { throw 'install folder not removed' }
           exit 0
 
-  # Builds comicsbot-<version>-setup.exe with Inno Setup and runs it unattended: install with the bot
+  # Builds ComicsBot-<version>-setup.exe (the name the release attaches) with Inno Setup and runs it unattended: install with the bot
   # starting at boot, check the result like the zip installer above, then uninstall with /PURGE.
   setup-windows:
     # A hung installer (e.g. waiting on a dialog) must fail fast instead of running for hours.
@@ -240,7 +241,7 @@ jobs:
       - name: Silent install
         shell: pwsh
         run: |
-          $setup = (Get-Item dist/comicsbot-*-setup.exe).FullName
+          $setup = (Get-Item dist/*-*-setup.exe).FullName
           $env:DISCORD_TOKEN = 'ci-fake-token'
           $env:COMICSBOT_GITHUB_TOKEN = 'ci-fake-github-token'
           $setupArgs = '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/TASKS=startatboot,autoupdate', "/LOG=$env:RUNNER_TEMP\setup.log"

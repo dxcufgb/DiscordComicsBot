@@ -1,7 +1,7 @@
-; Inno Setup script for the Windows installer (comicsbot-<version>-setup.exe).
+; Inno Setup script for the Windows installer (<stem>-<version>-setup.exe, see scripts/build_setup.ps1).
 ;
 ; Build it with scripts/build_setup.ps1, which runs:
-;   iscc /DAppVersion=<version> /DSourceDir=<extracted windows zip> /O<output dir> ComicsBot.iss
+;   iscc /DAppVersion=<version> /DSourceDir=<extracted windows zip> /DOutputBase=<name> /O<output dir> ComicsBot.iss
 ;
 ; The wizard copies the bot into %LOCALAPPDATA%\ComicsBot and then runs install.ps1 in that folder,
 ; which sets up Python and the dependencies, writes .env with the token (readable only by the user)
@@ -18,7 +18,10 @@
   #define AppVersion "0.0.0"
 #endif
 #ifndef SourceDir
-  #error Pass /DSourceDir=<folder with the extracted comicsbot-<version>-windows.zip>
+  #error Pass /DSourceDir=<folder with the extracted <stem>-<version>-windows.zip>
+#endif
+#ifndef OutputBase
+  #define OutputBase "comicsbot-" + AppVersion + "-setup"
 #endif
 
 [Setup]
@@ -38,7 +41,7 @@ PrivilegesRequired=lowest
 MinVersion=10.0
 ; Run as a 64-bit installer so {sys} is the 64-bit System32 (and the 64-bit PowerShell).
 ArchitecturesInstallIn64BitMode=x64compatible
-OutputBaseFilename=comicsbot-{#AppVersion}-setup
+OutputBaseFilename={#OutputBase}
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern

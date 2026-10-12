@@ -16,7 +16,8 @@ and Windows (scheduled task + Inno Setup wizard) installers.
 - `comicsbot/feeds.py` – fetching/parsing feeds and SSRF protection.
 - `comicsbot/updater.py` – opt-in auto-updater (stdlib only, self-contained: the installers run a copy of it
   outside the package; the GitHub token goes only to api.github.com and never to logs). Checks
-  `releases/latest`, downloads `comicsbot-X.Y.Z-linux.tar.gz` / `-windows.zip` (top folder `comicsbot-X.Y.Z/`),
+  `releases/latest`, downloads `comicsbot-X.Y.Z-linux.tar.gz` / `-windows.zip` (name matched ignoring case; top
+  folder `comicsbot-X.Y.Z/` or `ComicsBot-X.Y.Z/`, exactly one),
   requires `SHA256SUMS.txt` (a release without them is logged and left alone), `--check` exits 10 when a newer
   release exists. Extracts by hand, backs up the program files, runs the release's
   installer and rolls back on failure; a rollback that fails too logs "ROLLBACK FAILED" and keeps the backup.
@@ -49,10 +50,13 @@ and Windows (scheduled task + Inno Setup wizard) installers.
   `--help`; `INSTALL_GITHUB_TOKEN` from the one-liner may become the updater token (asked first when interactive).
 - **Releasing**: Actions → Release → Run workflow → type the version. Fallback: publish a release `vX.Y.Z` on
   GitHub, files are attached afterwards. No version bump in the code.
-- Release files: `comicsbot-X.Y.Z-linux.tar.gz` / `-windows.zip` / `-setup.exe`, fixed names `comicsbot-linux.tar.gz`
-  / `comicsbot-windows.zip` / `comicsbot-setup.exe`, `SHA256SUMS.txt`, plus `LEGACY_ASSETS` (scripts/build_release.py:
-  `ComicsBot-X.Y.Z-*` with top folder `ComicsBot-X.Y.Z/`, and `SHA256SUMS`) for the updaters of 2.3.2 and older;
-  `tests/test_legacy_update.py` runs the real 2.3.2 updater (`tests/updater_2_3_2.py`) against them.
+- Release files: versioned `ComicsBot-X.Y.Z-linux.tar.gz` / `-windows.zip` / `-setup.exe` (top folder
+  `ComicsBot-X.Y.Z/`) and `SHA256SUMS`, as up to 2.3.2, because 2.3.2's updater needs exactly that; fixed names
+  `comicsbot-linux.tar.gz` / `comicsbot-windows.zip` / `comicsbot-setup.exe` (top folder `comicsbot-X.Y.Z/`); and
+  `SHA256SUMS.txt`. GitHub file names are unique ignoring case, so `comicsbot-X.Y.Z-*` cannot be attached too; the
+  build fails on any such clash. Dropping `LEGACY_ASSETS` (scripts/build_release.py) means switching the versioned
+  names and top folder to lowercase. `tests/test_legacy_update.py` runs the real 2.3.2 updater
+  (`tests/updater_2_3_2.py`) and the current one against the published files.
 
 ## Conventions
 - `from __future__ import annotations` in every module; modern type hints; frozen dataclasses.

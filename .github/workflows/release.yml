@@ -6,9 +6,9 @@ name: Release
 #      tested commit and publishes the release with all files attached at once.
 #   2. Fallback: publish a release with a new tag v1.2.3 in the GitHub UI. The same CI and build run, and the
 #      files are attached to it afterwards (with the install instructions above its description).
-# Files: comicsbot-X.Y.Z-linux.tar.gz / -windows.zip / -setup.exe, the same under fixed names
-# (comicsbot-linux.tar.gz, ...), the legacy names older updaters look for (LEGACY_ASSETS in
-# scripts/build_release.py) and SHA256SUMS.txt.
+# Files: ComicsBot-X.Y.Z-linux.tar.gz / -windows.zip / -setup.exe (the case of 2.3.2, which its updater needs;
+# GitHub file names are unique ignoring case, so not also comicsbot-X.Y.Z-*: LEGACY_ASSETS in
+# scripts/build_release.py), the same under fixed names (comicsbot-linux.tar.gz, ...), SHA256SUMS and SHA256SUMS.txt.
 on:
   workflow_dispatch:
     inputs:
@@ -146,7 +146,7 @@ jobs:
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: setup-exe
-          path: dist/comicsbot-*-setup.exe
+          path: dist/*-*-setup.exe
           if-no-files-found: error
 
   publish:

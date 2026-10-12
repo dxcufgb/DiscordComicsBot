@@ -19,5 +19,7 @@ into the built files only; never edit `__version__` or `pyproject.toml` for a re
 3. Make sure `main` has what should ship and its CI is green (`gh run list --branch main --limit 5`).
 4. Ask the user to confirm, then start it: `gh workflow run release.yml --ref main -f version=<version>`
    (or tell the user: Actions → Release → Run workflow → type `<version>`).
-5. Report the run URL. The workflow runs the full CI, builds every file, creates the tag `v<version>` and publishes
+5. Report the run URL. Expected files: `ComicsBot-<version>-linux.tar.gz` / `-windows.zip` / `-setup.exe` (old case on
+   purpose, for the 2.3.2 updater; GitHub file names are unique ignoring case), `comicsbot-linux.tar.gz` /
+   `-windows.zip` / `-setup.exe`, `SHA256SUMS`, `SHA256SUMS.txt`. The workflow runs the full CI, builds every file, creates the tag `v<version>` and publishes
    the release (draft first, published once all files are attached). Nothing is published if any job fails.
