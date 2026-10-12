@@ -3,6 +3,7 @@
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -120,3 +121,34 @@ def test_updater_is_shipped_in_both_archives():
 @pytest.mark.skipif(not shutil.which("shellcheck"), reason="shellcheck is not installed")
 def test_shellcheck():
     subprocess.run(["shellcheck", "install.sh", "start-bot.sh", ".github/check-linux-layout.sh"], cwd=ROOT, check=True)
+
+
+def _install_sh_function(name):
+    start = INSTALL_SH.index(f"{name}() {{")
+    return INSTALL_SH[start : INSTALL_SH.index("\n}\n", start) + 3]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="needs a pseudo-terminal")
+@pytest.mark.parametrize("function", ["confirm", "ask_no"])
+def test_end_of_input_at_a_prompt_is_no(function):
+    """Ctrl-D (or a closed terminal) must never count as yes, e.g. to storing INSTALL_GITHUB_TOKEN."""
+    import os
+    import pty
+
+    script = "ASSUME_YES=0\n" + "".join(_install_sh_function(f) for f in ("confirm", "interactive", "ask_no"))
+    script += f'if {function} "Store it?"; then echo ANSWER=yes; else echo ANSWER=no; fi\n'
+    pid, fd = pty.fork()
+    if pid == 0:  # child: bash at a terminal
+        os.execvp("bash", ["bash", "--norc", "--noprofile", "-c", script])
+    output = b""
+    os.write(fd, b"\x04")  # end of input, as at an empty line
+    while True:
+        try:
+            chunk = os.read(fd, 1024)
+        except OSError:
+            break
+        if not chunk:
+            break
+        output += chunk
+    os.waitpid(pid, 0)
+    assert b"ANSWER=no" in output, output

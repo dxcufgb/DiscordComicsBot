@@ -71,7 +71,8 @@ confirm() {
     [ "$ASSUME_YES" -eq 1 ] && return 0
     [ -t 0 ] || return 1
     local answer
-    read -r -p "$1 [Y/n] " answer
+    # End of input (no answer at all) is a no, never the default yes.
+    read -r -p "$1 [Y/n] " answer || return 1
     [[ -z "$answer" || "$answer" =~ ^[Yy] ]]
 }
 # True when questions may be asked: no --yes, and someone at a terminal.
@@ -82,7 +83,7 @@ interactive() {
 ask_no() {
     interactive || return 1
     local answer
-    read -r -p "$1 [y/N] " answer
+    read -r -p "$1 [y/N] " answer || return 1
     [[ "$answer" =~ ^[Yy] ]]
 }
 

@@ -604,6 +604,8 @@ def test_main_refuses_a_concurrent_run(tmp_path):
     with updater.update_lock(lock):
         args = ["--install-dir", str(install), "--token-file", str(token_file), "--lock-file", str(lock)]
         assert updater.main(args) == updater.EXIT_BUSY
+        # --check could not check: never 0 ("up to date") or 10 ("newer release available").
+        assert updater.main([*args, "--check"]) == updater.EXIT_BUSY not in (0, updater.EXIT_UPDATE_AVAILABLE)
 
 
 def test_token_file_must_hold_only_the_token(tmp_path):

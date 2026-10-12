@@ -100,6 +100,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          # The exact commit this run is for (a release event's tag could be moved meanwhile).
+          ref: ${{ github.sha }}
           persist-credentials: false
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
@@ -127,6 +129,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          # The exact commit this run is for (a release event's tag could be moved meanwhile).
+          ref: ${{ github.sha }}
           persist-credentials: false
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
@@ -154,6 +158,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          # The exact commit this run is for (a release event's tag could be moved meanwhile).
+          ref: ${{ github.sha }}
           persist-credentials: false
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
@@ -201,14 +207,32 @@ jobs:
                 --jq .body; } > notes.md
             # A draft with every file first, then published in one step: updaters never see a release
             # without its files. The tag is created on the commit that was tested and built.
-            gh release create "$TAG" --repo "$REPO" --draft --target "$GITHUB_SHA" --title "$TAG" \
-              --notes-file notes.md "${files[@]}"
-            if [[ "$PRERELEASE" == "true" ]]; then
-              gh release edit "$TAG" --repo "$REPO" --draft=false --prerelease
-            else
-              gh release edit "$TAG" --repo "$REPO" --draft=false --latest
+            # If creating or publishing fails, delete what was created, but only while it is still a draft
+            # (never a published release), so the next run is not blocked by a leftover draft.
+            drop_draft() {
+              if [[ "$(gh release view "$TAG" --repo "$REPO" --json isDraft --jq .isDraft 2> /dev/null)" == "true" ]]; then
+                echo "::warning::Deleting the unpublished draft $TAG"
+                gh release delete "$TAG" --repo "$REPO" --yes
+              fi
+            }
+            if ! gh release create "$TAG" --repo "$REPO" --draft --target "$GITHUB_SHA" --title "$TAG" \
+              --notes-file notes.md "${files[@]}"; then
+              drop_draft
+              exit 1
+            fi
+            flags=(--latest)
+            if [[ "$PRERELEASE" == "true" ]]; then flags=(--prerelease); fi
+            if ! gh release edit "$TAG" --repo "$REPO" --draft=false "${flags[@]}"; then
+              drop_draft
+              exit 1
             fi
           else
+            # The files were built from $GITHUB_SHA: refuse if the tag has been moved to another commit since.
+            tagged="$(gh api "repos/$REPO/commits/$TAG" --jq .sha)"
+            if [[ "$tagged" != "$GITHUB_SHA" ]]; then
+              echo "::error::The tag $TAG now points at $tagged, not at $GITHUB_SHA that was tested and built."
+              exit 1
+            fi
             # Published in the GitHub UI: attach the files and put the install instructions above its
             # description (once, so re-runs don't repeat them).
             gh release upload "$TAG" --repo "$REPO" --clobber "${files[@]}"
