@@ -15,7 +15,10 @@ name: Claude
 on:
   pull_request:
     types: [opened, synchronize, ready_for_review, reopened]
-  issue_comment:
+  # zizmor flags issue_comment as dangerous because it runs with secrets on any comment. Here the respond job
+  # only reacts to "@claude", claude-code-action refuses commenters without write access, and the checkout is
+  # the default branch without persisted credentials, so no untrusted code runs with the token.
+  issue_comment: # zizmor: ignore[dangerous-triggers]
     types: [created]
   pull_request_review_comment:
     types: [created]
