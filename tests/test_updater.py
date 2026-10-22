@@ -743,7 +743,7 @@ def test_main_without_a_token_file_or_an_empty_one_updates_without_a_token(tmp_p
     caplog.set_level(logging.INFO)
     assert updater.main(["--install-dir", str(install), "--token-file", str(token_file)]) == 0
     assert seen == [(None, tmp_path / "conf" / "backups")]
-    assert "without one" in caplog.text
+    assert "without authentication" in caplog.text
 
 
 def test_main_without_the_token_file_option(tmp_path, monkeypatch):

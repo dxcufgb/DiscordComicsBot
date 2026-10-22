@@ -1014,7 +1014,7 @@ def main(argv: list[str] | None = None) -> int:
                 check_root_safety(install_dir)
             token = read_token(args.token_file)
             if token is None:
-                log.info("No GitHub token configured; checking %s without one (it is public)", REPO)
+                log.info("Checking %s for releases without authentication (it is public)", REPO)
             backup_root = args.backup_dir or settings_dir / "backups"
             return update(install_dir, token, platform=args.platform, check_only=args.check, backup_root=backup_root)
     except UpdateBusy:
