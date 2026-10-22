@@ -83,19 +83,21 @@ jobs:
           mkdir "$RUNNER_TEMP/other" && echo keep > "$RUNNER_TEMP/other/notes.txt"
           if sudo DISCORD_TOKEN=ci-fake-token ./install.sh --yes --dir "$RUNNER_TEMP/other"; then exit 1; fi
           test "$(ls -A "$RUNNER_TEMP/other")" = notes.txt
-          # INSTALL_GITHUB_TOKEN is what the one-line installer passes on; with --yes it is used without asking.
-          sudo DISCORD_TOKEN=ci-fake-token INSTALL_GITHUB_TOKEN=ci-fake-github-token ./install.sh --yes --auto-update \
+          # Automatic updates need no GitHub token (the repository is public): --yes never asks for one.
+          sudo DISCORD_TOKEN=ci-fake-token ./install.sh --yes --auto-update < /dev/null \
             || echo "installer exited with $? (expected: the bot can't log in with a fake token)"
           sudo systemd-analyze verify /etc/systemd/system/comicsbot.service \
             /etc/systemd/system/comicsbot-update.service /etc/systemd/system/comicsbot-update.timer
           systemctl is-enabled comicsbot-update.timer
-          test "$(sudo stat -c '%U:%G %a' /etc/comicsbot/github-token)" = "root:root 600"
+          sudo test ! -e /etc/comicsbot/github-token
           test "$(sudo stat -c '%U:%G %a' /usr/local/lib/comicsbot-updater/updater.py)" = "root:root 644"
-          # A fake GitHub token must fail cleanly, without printing the token.
-          if out="$(sudo /opt/comicsbot/install.sh --check-update 2>&1)"; then echo "$out"; exit 1; fi
+          # Without a token the check reaches GitHub: 10 (this build's version is older than the latest release), or
+          # a clear error while the repository is still private or the runner's IP has used up the rate limit.
+          status=0
+          out="$(sudo /opt/comicsbot/install.sh --check-update 2>&1)" || status=$?
           echo "$out"
-          grep -q "GitHub refused the request" <<< "$out"
-          if grep -q "ci-fake-github-token" <<< "$out"; then echo "token leaked"; exit 1; fi
+          [ "$status" -eq 10 ] || { [ "$status" -eq 1 ] && grep -qE "not found \(HTTP 404\)|rate limit is used up" <<< "$out"; }
+          if grep -q "Traceback" <<< "$out"; then exit 1; fi
           test "$(sudo stat -c '%U:%G %a' /opt/comicsbot/.env)" = "comicsbot:comicsbot 600"
           sudo cat /opt/comicsbot/data/discord.log
           sudo grep -q "Discord rejected the token" /opt/comicsbot/data/discord.log
@@ -132,9 +134,18 @@ jobs:
           if systemctl is-enabled --quiet comicsbot-update.timer; then echo "automatic updates still on"; exit 1; fi
           test ! -e /usr/local/lib/comicsbot-updater
           sudo test ! -e /etc/comicsbot/github-token
-          sudo COMICSBOT_GITHUB_TOKEN=ci-fake-github-token /opt/comicsbot/install.sh --enable-auto-update
+          # A token is still used when given: INSTALL_GITHUB_TOKEN is what the one-line installer passes on; with
+          # --yes it is used without asking.
+          sudo INSTALL_GITHUB_TOKEN=ci-fake-github-token /opt/comicsbot/install.sh --yes --enable-auto-update
           systemctl is-enabled comicsbot-update.timer
           test "$(sudo stat -c '%U:%G %a' /etc/comicsbot/github-token)" = "root:root 600"
+          # GitHub refuses the fake token: that is said clearly (the updater then tries without it), never printing it.
+          out="$(sudo /opt/comicsbot/install.sh --check-update 2>&1)" || true
+          echo "$out"
+          grep -q "GitHub refused the request" <<< "$out"
+          if grep -q "ci-fake-github-token" <<< "$out"; then echo "token leaked"; exit 1; fi
+          sudo COMICSBOT_GITHUB_TOKEN=ci-fake-github-token-2 /opt/comicsbot/install.sh --enable-auto-update
+          sudo grep -qx "ci-fake-github-token-2" /etc/comicsbot/github-token
           sudo /opt/comicsbot/install.sh --uninstall --purge
           test ! -e /opt/comicsbot
           test ! -e /etc/systemd/system/comicsbot.service
@@ -243,7 +254,8 @@ jobs:
         run: |
           $setup = (Get-Item dist/*-*-setup.exe).FullName
           $env:DISCORD_TOKEN = 'ci-fake-token'
-          $env:COMICSBOT_GITHUB_TOKEN = 'ci-fake-github-token'
+          # No GitHub token: automatic updates need none (the repository is public).
+          $env:COMICSBOT_GITHUB_TOKEN = ''
           $setupArgs = '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/TASKS=startatboot,autoupdate', "/LOG=$env:RUNNER_TEMP\setup.log"
           $p = Start-Process $setup -ArgumentList $setupArgs -Wait -PassThru
           Get-Content "$env:RUNNER_TEMP\setup.log" -Tail 25
@@ -262,6 +274,7 @@ jobs:
           if (Select-String -Quiet -Path "$env:RUNNER_TEMP\setup.log" -Pattern 'ci-fake-token') { throw 'token leaked into the setup log' }
           if (Select-String -Quiet -Path "$env:RUNNER_TEMP\setup.log" -Pattern 'ci-fake-github-token') { throw 'GitHub token leaked into the setup log' }
           if (-not (Get-ScheduledTask -TaskName ComicsBot-Update -ErrorAction SilentlyContinue)) { throw 'autoupdate task was not applied' }
+          if (Test-Path "$dir\updater\github-token") { throw 'a GitHub token file was written without a token' }
           if (-not (Select-String -Quiet -Path "$dir\discord.log" -Pattern 'Discord rejected the token')) { throw 'bot did not run' }
           if (-not (Test-Path "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\ComicsBot\Restart ComicsBot.lnk")) { throw 'Start menu shortcuts missing' }
           exit 0

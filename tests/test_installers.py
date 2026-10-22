@@ -55,6 +55,43 @@ def test_install_sh_takes_the_one_liners_token_from_the_environment_only():
     assert body.index("! interactive") < body.index('UPDATE_TOKEN="$INSTALL_TOKEN"')
 
 
+def _install_sh_function(name):
+    start = INSTALL_SH.index(f"{name}() {{")
+    end = INSTALL_SH.index("\n", start) if INSTALL_SH[start:].split("\n", 1)[0].endswith("}") else None
+    return INSTALL_SH[start : end + 1] if end else INSTALL_SH[start : INSTALL_SH.index("\n}\n", start) + 3]
+
+
+@pytest.mark.parametrize(
+    ("env", "expected"),
+    [
+        ("", ""),  # no token anywhere: fine, the repository is public
+        ("INSTALL_TOKEN=from-one-liner", "from-one-liner"),  # --yes: the one-liner's token is used without asking
+        ("UPDATE_TOKEN=given", "given"),
+    ],
+)
+def test_install_sh_never_needs_a_github_token(tmp_path, env, expected):
+    script = (
+        f"ASSUME_YES=1\nUPDATE_TOKEN=\nINSTALL_TOKEN=\nUPDATE_TOKEN_FILE={tmp_path}/missing\nGITHUB_REPO=x/y\n{env}\n"
+    )
+    script += "".join(_install_sh_function(f) for f in ("die", "confirm", "interactive", "need_update_token"))
+    script += 'need_update_token < /dev/null && echo "OK token=$UPDATE_TOKEN"\n'
+    result = subprocess.run(["bash", "--norc", "--noprofile", "-c", script], capture_output=True, text=True, check=True)
+    assert result.stdout.strip() == f"OK token={expected}"
+
+
+def test_installers_never_ask_for_or_demand_a_github_token():
+    body = _install_sh_function("need_update_token")
+    assert "die " not in body and "read " not in body
+    enable = _install_sh_function("enable_auto_update")
+    assert "die " not in enable
+    assert "need a GitHub token" not in INSTALL_SH and "needs a GitHub token" not in INSTALL_SH
+    assert "Read-Secret 'GitHub token'" not in INSTALL_PS1
+    assert "need a GitHub token" not in INSTALL_PS1
+    iss = ISS.decode("ascii")
+    assert "Please paste the GitHub token" not in iss and "need a GitHub token" not in iss
+    assert "GitHub token (optional)" in iss
+
+
 def test_install_sh_never_takes_the_github_token_as_an_option():
     assert "COMICSBOT_GITHUB_TOKEN" in INSTALL_SH
     assert not re.search(r"--github-token|--update-token", INSTALL_SH)
@@ -121,11 +158,6 @@ def test_updater_is_shipped_in_both_archives():
 @pytest.mark.skipif(not shutil.which("shellcheck"), reason="shellcheck is not installed")
 def test_shellcheck():
     subprocess.run(["shellcheck", "install.sh", "start-bot.sh", ".github/check-linux-layout.sh"], cwd=ROOT, check=True)
-
-
-def _install_sh_function(name):
-    start = INSTALL_SH.index(f"{name}() {{")
-    return INSTALL_SH[start : INSTALL_SH.index("\n}\n", start) + 3]
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="needs a pseudo-terminal")

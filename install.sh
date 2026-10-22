@@ -10,7 +10,7 @@
 #   --auto-update           Turn automatic updates on as part of this install
 #   --no-auto-update        Turn automatic updates off as part of this install
 #   --enable-auto-update    Turn automatic updates on for the existing install, nothing else
-#   --disable-auto-update   Turn them off (and delete the GitHub token) for the existing install, nothing else
+#   --disable-auto-update   Turn them off (and delete a stored GitHub token) for the existing install, nothing else
 #   --check-update          Only check: exit 0 = up to date, 10 = newer release available, other = error
 #   --update-now            Install the latest release now (same path as the daily updater)
 #   --uninstall [--purge]   Remove the bot (keep / also delete .env, the data and the service user)
@@ -24,9 +24,9 @@
 #   PYTHON=/path            Use this Python 3.10+ instead of searching PATH (environment variable)
 #
 # Automatic updates (off unless turned on; see "Automatic updates" in README.md) download releases from the
-# private GitHub repository with a fine-grained token (Contents: Read-only). It is asked for, or read from
-# COMICSBOT_GITHUB_TOKEN, or from INSTALL_GITHUB_TOKEN (set by the one-line installer; an interactive install
-# asks before reusing it). It is never passed as an option and stored in /etc/comicsbot/github-token (root, 600).
+# public GitHub repository and need no GitHub token. A token is only used when one is given: COMICSBOT_GITHUB_TOKEN,
+# INSTALL_GITHUB_TOKEN (set by the one-line installer; an interactive install asks before reusing it) or one already
+# stored. It is never passed as an option and stored in /etc/comicsbot/github-token (root, 600).
 #
 # Layout: the program files (and .venv) belong to root and only root can change them; the bot runs as the
 # system user comicsbot and writes only to DIR/data (state.json, discord.log, bot.lock, ...). DIR/.env is
@@ -47,7 +47,7 @@ ACTION="install"
 PURGE=0
 AUTO_UPDATE=0
 UPDATE_TOKEN="${COMICSBOT_GITHUB_TOKEN:-}"
-# The token the one-line installer downloaded the release with; offered for automatic updates.
+# The token the one-line installer downloaded the release with, if it was given one; offered for automatic updates.
 INSTALL_TOKEN="${INSTALL_GITHUB_TOKEN:-}"
 GITHUB_REPO="dxcufgb/DiscordComicsBot"
 UPDATE_UNIT="comicsbot-update"
@@ -387,32 +387,26 @@ set_token() {
 }
 
 # -- automatic updates -----------------------------------------------------
-# A root systemd timer runs comicsbot/updater.py (copied to $UPDATER_DIR) once a day. It downloads the latest release with the GitHub token in
-# $UPDATE_TOKEN_FILE (root only), checks SHA256SUMS and runs that release's install.sh, which
-# keeps .env and the data; if that fails the previous version is restored.
+# A root systemd timer runs comicsbot/updater.py (copied to $UPDATER_DIR) once a day. It downloads the latest release
+# (with the GitHub token in $UPDATE_TOKEN_FILE, root only, when there is one; the repository is public, so none is
+# needed), checks SHA256SUMS.txt and runs that release's install.sh, which keeps .env and the data; if that fails the
+# previous version is restored.
 
 auto_update_enabled() {
     [ -f "/etc/systemd/system/$UPDATE_UNIT.timer" ]
 }
 
-# Asks for the GitHub token unless one is stored already or given in COMICSBOT_GITHUB_TOKEN. The one-line
-# installer's token (INSTALL_GITHUB_TOKEN) is used when nothing else is, after asking in an interactive install.
+# Picks the GitHub token for automatic updates, if any: none is needed, because the repository is public. One given in
+# COMICSBOT_GITHUB_TOKEN or already stored is used; the one-line installer's token (INSTALL_GITHUB_TOKEN) is used when
+# nothing else is, after asking in an interactive install. Never asks for one and never fails without one.
 need_update_token() {
     [ -n "$UPDATE_TOKEN" ] && return 0
     [ -s "$UPDATE_TOKEN_FILE" ] && return 0
     if [ -n "$INSTALL_TOKEN" ] && { ! interactive \
-        || confirm "Use the GitHub token you gave the installer for automatic updates too?"; }; then
+        || confirm "Use the GitHub token you gave the installer for automatic updates too (not needed: $GITHUB_REPO is public)?"; }; then
         UPDATE_TOKEN="$INSTALL_TOKEN"
-        return 0
     fi
-    if interactive; then
-        echo "Automatic updates download releases from the private GitHub repository $GITHUB_REPO."
-        echo "Create a fine-grained token at https://github.com/settings/personal-access-tokens/new with"
-        echo "access to only $GITHUB_REPO and the permission Contents: Read-only, and paste it here."
-        read -r -s -p "GitHub token: " UPDATE_TOKEN
-        echo
-    fi
-    [ -n "$UPDATE_TOKEN" ] || die "automatic updates need a GitHub token: set COMICSBOT_GITHUB_TOKEN"
+    return 0
 }
 
 write_update_token() {
@@ -482,9 +476,8 @@ UNIT
 enable_auto_update() {
     need_update_token
     write_update_token
-    [ -s "$UPDATE_TOKEN_FILE" ] || die "no GitHub token stored in $UPDATE_TOKEN_FILE"
     install_updater
-    info "Automatic updates are on: checked daily (sudo $INSTALL_DIR/install.sh --check-update to test the token)"
+    info "Automatic updates are on: checked daily (sudo $INSTALL_DIR/install.sh --check-update to check now)"
 }
 
 remove_updater() {
@@ -521,7 +514,7 @@ do_enable_update() {
 
 do_check_update() {
     require_installed
-    if [ ! -f "$UPDATER_DIR/updater.py" ] || [ ! -s "$UPDATE_TOKEN_FILE" ]; then
+    if [ ! -f "$UPDATER_DIR/updater.py" ]; then
         die "automatic updates are not enabled; run: sudo $SCRIPT --enable-auto-update"
     fi
     ensure_python > /dev/null
@@ -560,7 +553,7 @@ do_install() {
     fi
     # First interactive install: offer automatic updates. Upgrades keep whatever was chosen.
     if [ "$AUTO_UPDATE" -eq 0 ] && ! auto_update_enabled && [ ! -f "$INSTALL_DIR/.env" ] \
-        && ask_no "Install new ComicsBot releases automatically (checked daily; needs a GitHub token)?"; then
+        && ask_no "Install new ComicsBot releases automatically (checked daily)?"; then
         AUTO_UPDATE=1
     fi
     [ "$AUTO_UPDATE" -eq 1 ] && need_update_token

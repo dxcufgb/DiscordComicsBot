@@ -3,6 +3,8 @@ name = "discord-comics-bot"
 version = "2.3.2"
 description = "Discord bot that posts new comic strips from RSS/Atom feeds"
 requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
 
 [tool.ruff]
 line-length = 120
