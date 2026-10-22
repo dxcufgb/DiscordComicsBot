@@ -1,8 +1,8 @@
 """Automatic updates for a ComicsBot installed from a release archive.
 
-    python -I updater.py --install-dir DIR --token-file FILE [--check] [--log-file FILE] [--lock-file FILE]
+    python -I updater.py --install-dir DIR [--token-file FILE] [--check] [--log-file FILE] [--lock-file FILE]
 
-Looks up the latest release of the private GitHub repository, and when it is newer than the
+Looks up the latest release of the public GitHub repository, and when it is newer than the
 installed version downloads this platform's archive (``comicsbot-X.Y.Z-linux.tar.gz`` or
 ``comicsbot-X.Y.Z-windows.zip``, the name compared ignoring case: releases still use ``ComicsBot-X.Y.Z-...`` for
 the updaters of 2.3.2 and older), checks it against the release's ``SHA256SUMS.txt``,
@@ -23,7 +23,10 @@ It is started by the ``comicsbot-update`` systemd timer (Linux, as root) or the
 The installers copy this file out of the install folder and run it from there, so it must stay
 self-contained: standard library only, no imports from the ``comicsbot`` package.
 
-The GitHub token is read from ``--token-file``, sent only to api.github.com and never logged.
+No GitHub token is needed: the repository is public. If ``--token-file`` names a file that holds a token (installs
+from when the repository was private have one), it is used, sent only to api.github.com and never logged; a missing
+or empty file means no token. Without a token GitHub allows 60 API requests per hour per IP address, plenty for a
+daily check; a rate-limit answer is reported as such and the next run tries again.
 """
 
 from __future__ import annotations
@@ -110,6 +113,10 @@ log = logging.getLogger("comicsbot.updater")
 
 class UpdateError(Exception):
     """An update step failed; the message is safe to log (it never contains the token)."""
+
+
+class TokenRefused(UpdateError):
+    """GitHub refused the configured token (HTTP 401: invalid or expired)."""
 
 
 class UpdateBusy(Exception):
@@ -216,13 +223,54 @@ def urllib_fetch(url: str, headers: Mapping[str, str]) -> Response:
     return _UrllibResponse(raw, raw.status, raw.headers)
 
 
+def _rate_limited(response: Response) -> bool:
+    """Whether GitHub answered that the API rate limit is used up (HTTP 429, or 403 with the rate-limit headers)."""
+    if response.status == 429:
+        return True
+    return response.status == 403 and (
+        response.header("X-RateLimit-Remaining") == "0" or response.header("Retry-After") is not None
+    )
+
+
+def _api_error(response: Response, token: str | None) -> UpdateError | None:
+    """A clear error for GitHub API answers that mean "not allowed", "not found" or "too many requests"."""
+    status = response.status
+    if _rate_limited(response):
+        if token:
+            return UpdateError(f"GitHub's API rate limit is used up (HTTP {status}); the next run tries again")
+        return UpdateError(
+            f"GitHub's API rate limit is used up (HTTP {status}): without a token GitHub allows 60 requests per "
+            "hour per IP address (shared by everything on this network); the next run tries again"
+        )
+    if status in (401, 403):
+        if token:
+            return (TokenRefused if status == 401 else UpdateError)(
+                f"GitHub refused the request (HTTP {status}): the token in the token file is invalid, expired or "
+                f"has no read access to {REPO}. {REPO} is public, so no token is needed: delete the token file "
+                "to update without one"
+            )
+        return UpdateError(f"GitHub refused the request (HTTP {status}) without a token")
+    if status == 404:
+        if token:
+            return UpdateError(
+                f"not found (HTTP 404) on {API_HOST}: {REPO} has no published release, "
+                "or the token cannot see the repository"
+            )
+        return UpdateError(
+            f"not found (HTTP 404) on {API_HOST}: {REPO} has no published release, or the repository is not "
+            "public (then a token that can read it is needed in the token file)"
+        )
+    return None
+
+
 def http_get(
-    url: str, *, token: str, accept: str, fetch: Fetch, max_bytes: int, sink: Callable[[bytes], object]
+    url: str, *, token: str | None, accept: str, fetch: Fetch, max_bytes: int, sink: Callable[[bytes], object]
 ) -> None:
     """Download ``url``, passing the body to ``sink`` in chunks and following redirects by hand.
 
-    The token goes only to https://api.github.com; a redirect elsewhere (GitHub's pre-signed asset
-    download URL) is fetched without it. Every hop must be HTTPS, and the body is capped at ``max_bytes``.
+    The token (if any; ``None`` sends no Authorization header) goes only to https://api.github.com; a redirect
+    elsewhere (GitHub's pre-signed asset download URL) is fetched without it. Every hop must be HTTPS, and the body
+    is capped at ``max_bytes``.
     """
     for _hop in range(MAX_REDIRECTS + 1):
         parts = urlsplit(url)
@@ -230,8 +278,10 @@ def http_get(
         if parts.scheme != "https":
             raise UpdateError(f"refusing a non-HTTPS URL (host {host})")
         headers = {"Accept": accept, "User-Agent": USER_AGENT}
-        if host == API_HOST and parts.port in (None, 443):
-            headers["Authorization"] = f"Bearer {token}"
+        is_api = host == API_HOST and parts.port in (None, 443)
+        if is_api:
+            if token:
+                headers["Authorization"] = f"Bearer {token}"
             headers["X-GitHub-Api-Version"] = "2022-11-28"
         response = fetch(url, headers)
         try:
@@ -241,16 +291,9 @@ def http_get(
                     raise UpdateError(f"redirect without a location from {host}")
                 url = urljoin(url, location)
                 continue
-            if response.status in (401, 403):
-                raise UpdateError(
-                    f"GitHub refused the request (HTTP {response.status}): the token in the token file is "
-                    f"invalid, expired or has no read access to {REPO}"
-                )
-            if response.status == 404:
-                raise UpdateError(
-                    f"not found (HTTP 404) on {host}: {REPO} has no published release, "
-                    "or the token cannot see the repository"
-                )
+            error = _api_error(response, token) if is_api else None
+            if error is not None:
+                raise error
             if response.status != 200:
                 raise UpdateError(f"HTTP {response.status} from {host}")
             length = response.header("Content-Length")
@@ -268,7 +311,7 @@ def http_get(
     raise UpdateError("too many redirects")
 
 
-def get_bytes(url: str, *, token: str, accept: str, fetch: Fetch, max_bytes: int) -> bytes:
+def get_bytes(url: str, *, token: str | None, accept: str, fetch: Fetch, max_bytes: int) -> bytes:
     data = bytearray()
     http_get(url, token=token, accept=accept, fetch=fetch, max_bytes=max_bytes, sink=data.extend)
     return bytes(data)
@@ -287,7 +330,7 @@ class Release:
     html_url: str = ""
 
 
-def latest_release(token: str, fetch: Fetch) -> Release | None:
+def latest_release(token: str | None, fetch: Fetch) -> Release | None:
     """The latest published release, or None if GitHub reports a draft or pre-release."""
     body = get_bytes(
         LATEST_RELEASE_URL, token=token, accept="application/vnd.github+json", fetch=fetch, max_bytes=MAX_JSON_BYTES
@@ -363,7 +406,7 @@ def parse_checksums(text: str) -> dict[str, str]:
     return sums
 
 
-def download_asset(url: str, dest: Path, *, token: str, fetch: Fetch, max_bytes: int) -> str:
+def download_asset(url: str, dest: Path, *, token: str | None, fetch: Fetch, max_bytes: int) -> str:
     """Download a release asset to ``dest`` and return its SHA-256."""
     digest = hashlib.sha256()
 
@@ -715,13 +758,18 @@ def run_command(command: list[str], timeout: int) -> int:
 # -- the update ------------------------------------------------------------------
 
 
-def read_token(path: Path) -> str:
+def read_token(path: Path | None) -> str | None:
+    """The GitHub token from ``path``, or None when there is no token file (or it is empty): none is needed."""
+    if path is None:
+        return None
     try:
         token = path.read_text(encoding="utf-8-sig").strip()
+    except FileNotFoundError:
+        return None
     except OSError as exc:
         raise UpdateError(f"cannot read the GitHub token file {path}: {exc.strerror}") from None
     if not token:
-        raise UpdateError(f"the GitHub token file {path} is empty")
+        return None
     if any(c.isspace() for c in token):
         raise UpdateError(f"the GitHub token file {path} must contain only the token")
     if os.name == "posix" and path.stat().st_mode & 0o077:
@@ -731,7 +779,7 @@ def read_token(path: Path) -> str:
 
 def update(
     install_dir: Path,
-    token: str,
+    token: str | None,
     *,
     platform: str,
     check_only: bool = False,
@@ -741,7 +789,13 @@ def update(
     sleep: Callable[[float], object] = time.sleep,
 ) -> int:
     installed = installed_version(install_dir)
-    release = latest_release(token, fetch)
+    try:
+        release = latest_release(token, fetch)
+    except TokenRefused as exc:
+        # The repository is public: a token left from when it was private (now expired, say) is not needed.
+        log.warning("%s; trying again without it", exc)
+        token = None
+        release = latest_release(token, fetch)
     if release is None:
         return EXIT_OK
     if not is_newer(release.version, installed):
@@ -926,13 +980,20 @@ def setup_logging(log_file: Path | None) -> None:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Update ComicsBot to the latest GitHub release.")
     parser.add_argument("--install-dir", type=Path, required=True, help="the ComicsBot install folder")
-    parser.add_argument("--token-file", type=Path, required=True, help="file with the GitHub token")
-    parser.add_argument("--lock-file", type=Path, help="lock file (default: update.lock next to the token file)")
+    parser.add_argument(
+        "--token-file",
+        type=Path,
+        help="file with a GitHub token (optional: the repository is public; a missing or empty file means none)",
+    )
+    parser.add_argument(
+        "--lock-file", type=Path, help="lock file (default: update.lock next to the token file, else this script)"
+    )
     parser.add_argument("--log-file", type=Path, help="also log to this file")
     parser.add_argument(
         "--backup-dir",
         type=Path,
-        help="where the previous version is backed up during an update (default: backups next to the token file)",
+        help="where the previous version is backed up during an update (default: backups next to the token file, "
+        "else this script)",
     )
     parser.add_argument(
         "--check",
@@ -944,13 +1005,17 @@ def main(argv: list[str] | None = None) -> int:
 
     setup_logging(args.log_file)
     install_dir = args.install_dir.resolve()
-    lock_file = args.lock_file or args.token_file.parent / "update.lock"
+    # Next to the token file as before (the installers' units may rely on it), else next to this script.
+    settings_dir = args.token_file.parent if args.token_file is not None else Path(__file__).resolve().parent
+    lock_file = args.lock_file or settings_dir / "update.lock"
     try:
         with update_lock(lock_file):
             if args.platform == "linux" and _running_as_root():
                 check_root_safety(install_dir)
             token = read_token(args.token_file)
-            backup_root = args.backup_dir or args.token_file.parent / "backups"
+            if token is None:
+                log.info("Checking %s for releases without authentication (it is public)", REPO)
+            backup_root = args.backup_dir or settings_dir / "backups"
             return update(install_dir, token, platform=args.platform, check_only=args.check, backup_root=backup_root)
     except UpdateBusy:
         log.warning("Another update is already running; not starting a second one")

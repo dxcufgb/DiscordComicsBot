@@ -26,7 +26,6 @@ bot as a service that starts with the computer.
 curl -fsSL https://raw.githubusercontent.com/dxcufgb/install/main/install.sh | sudo bash -s comicsbot
 ```
 
-This repository is private, so it asks for a fine-grained token with read-only *Contents* access to this repository.
 Or download `comicsbot-linux.tar.gz` from the latest release, then:
 
 ```sh
@@ -47,9 +46,8 @@ sudo ./install.sh
 | `--help` | usage listing exactly these first, then the ComicsBot options below |
 
 ComicsBot options: `--dir DIR` (install location, default `/opt/comicsbot`), `--token TOKEN` (or `DISCORD_TOKEN`),
-`--migrate-from DIR` and `PYTHON=/path/to/python3.x` (see the table further down). The GitHub token for automatic
-updates is never an option: it is asked for, or read from `COMICSBOT_GITHUB_TOKEN`, or from `INSTALL_GITHUB_TOKEN`
-(the one-line installer sets it; an interactive install asks before reusing it for automatic updates).
+`--migrate-from DIR` and `PYTHON=/path/to/python3.x` (see the table further down). Automatic updates need no GitHub
+token (see below).
 
 The bot is installed in `/opt/comicsbot` and runs as the system user `comicsbot`.
 Distributions older than Debian 12 / Ubuntu 22.04 ship a Python older than 3.10; upgrade the system, or install a
@@ -125,35 +123,35 @@ steps to recover by hand, keeps the backup of the previous version (`/var/backup
 version>-*` on Linux, `%LOCALAPPDATA%\ComicsBot\updater\backups\...` on Windows; the message names it) and exits
 with code 3. Only one update runs at a time; downloads are HTTPS only, with timeouts and size limits.
 
-**GitHub token.** The repository is private, so the updater needs a token that can read it:
+**No GitHub token needed.** The repository is public, so the updater checks and downloads releases without one.
+GitHub allows 60 unauthenticated API requests per hour per IP address; a check uses one, an update three. If that
+limit is used up (for example by other programs behind the same address), the run logs "GitHub's API rate limit is
+used up" and the next one tries again.
 
-1. Open <https://github.com/settings/personal-access-tokens/new> (Settings → Developer settings → Personal access
-   tokens → Fine-grained tokens → Generate new token).
-2. Resource owner: `dxcufgb`; Repository access: *Only select repositories* → `dxcufgb/DiscordComicsBot`.
-3. Permissions → Repository permissions → **Contents: Read-only** (Metadata: Read-only is added automatically).
-   Nothing else.
-4. Pick an expiration date and generate it. When it expires, updates fail with "GitHub refused the request"; enable
-   automatic updates again with a new token (it replaces the stored one).
-
-The installer asks for the token, or reads it from the `COMICSBOT_GITHUB_TOKEN` environment variable (on Linux also
-from `INSTALL_GITHUB_TOKEN`, which the one-line installer sets: used as is with `--yes`, after asking otherwise); it
-is never passed on the command line. It is stored apart from the bot's `.env` and sent only to `api.github.com` (the actual
-download is a redirect to GitHub's storage, which is fetched without it). It never appears in a log.
+A token is optional. It is only needed when the releases come from a private repository (a private fork, with its own
+`REPO` in `comicsbot/updater.py`: a fine-grained token with **Contents: Read-only** on it), and it raises the limit to
+5,000 requests per hour. The installers never ask for one; they use one given in the `COMICSBOT_GITHUB_TOKEN`
+environment variable (on Linux also `INSTALL_GITHUB_TOKEN`, which the one-line installer sets when it was given a token:
+used as is with `--yes`, after asking otherwise), and the setup wizard has an optional field for it. It is never passed
+on the command line, stored apart from the bot's `.env`, sent only to `api.github.com` (the actual download is a
+redirect to GitHub's storage, which is fetched without it) and never logged. Installs from when the repository was
+private keep their stored token and keep working; if GitHub refuses it (expired), the updater logs a warning and checks
+without it. To stop using a stored token, delete the token file (below).
 
 | | Linux | Windows |
 |---|---|---|
 | Turn on (off) while installing | `sudo ./install.sh --auto-update` (`--no-auto-update`; an interactive first install also asks) | Check *Install new ComicsBot releases automatically* in the setup, or `install.bat -EnableAutoUpdate` |
 | Turn on later | `sudo /opt/comicsbot/install.sh --enable-auto-update` | `install.bat -EnableAutoUpdate` in the install folder |
-| Turn off (deletes the token) | `sudo /opt/comicsbot/install.sh --disable-auto-update` | `install.bat -DisableAutoUpdate` |
-| Check only (tests the token; exit 0 = up to date, 10 = newer release available) | `sudo /opt/comicsbot/install.sh --check-update` | `install.bat -CheckUpdate` |
+| Turn off (also deletes a stored token) | `sudo /opt/comicsbot/install.sh --disable-auto-update` | `install.bat -DisableAutoUpdate` |
+| Check only (exit 0 = up to date, 10 = newer release available) | `sudo /opt/comicsbot/install.sh --check-update` | `install.bat -CheckUpdate` |
 | Update now | `sudo /opt/comicsbot/install.sh --update-now` | `install.bat -UpdateNow` |
 | Schedule | systemd timer `comicsbot-update.timer`, daily with up to 6 h random delay, runs missed checks after boot | Scheduled task `ComicsBot-Update`, daily between 04:00 and 08:00, or as soon as possible after that |
 | Runs as | root (it runs `install.sh`), in a hardened systemd service | the same Windows account as the bot (at logon, or without logon when the bot starts at boot) |
-| Token stored in | `/etc/comicsbot/github-token` (root, mode 600) | `%LOCALAPPDATA%\ComicsBot\updater\github-token` (readable only by your account, like `.env`) |
+| Optional token stored in | `/etc/comicsbot/github-token` (root, mode 600) | `%LOCALAPPDATA%\ComicsBot\updater\github-token` (readable only by your account, like `.env`) |
 | Log | `journalctl -u comicsbot-update` | `%LOCALAPPDATA%\ComicsBot\updater\update.log` |
 
 Upgrading (manually, or by the updater) keeps the choice; uninstalling removes the timer or task, the updater and
-the token. On Linux the updater runs from a root-owned copy in `/usr/local/lib/comicsbot-updater`, runs the new
+a stored token. On Linux the updater runs from a root-owned copy in `/usr/local/lib/comicsbot-updater`, runs the new
 release's `install.sh` from its own extracted copy and writes `update-notice.json` into `data/`. Because it runs as
 root, turning automatic updates on (and every updater run) refuses an install folder (resolved through links),
 program file, `.venv` file or parent folder that an account other than root could change, and a Python interpreter
@@ -161,7 +159,7 @@ program file, `.venv` file or parent folder that an account other than root coul
 write, such as the default `/opt/comicsbot`, with a system-wide Python. The updater also backs up and restores `.venv`
 on Linux. A setup run as administrator with *start at boot* sets up the update task to run
 without a logon too; that needs administrator rights, also for `install.bat -EnableAutoUpdate` later.
-Unattended Windows setup: set `COMICSBOT_GITHUB_TOKEN` and add `autoupdate` to `/TASKS`.
+Unattended Windows setup: add `autoupdate` to `/TASKS`.
 
 Automatic updates work from the first release that includes the updater; install that one by hand.
 Releases up to 2.3.2 named their files `ComicsBot-X.Y.Z-linux.tar.gz`, `-windows.zip`, `-setup.exe` and `SHA256SUMS`,
@@ -241,8 +239,8 @@ pip install -r requirements-dev.txt
 ruff check . && ruff format --check . && pytest
 ```
 
-The **Security** workflow (`.github/workflows/security.yml`; GitHub's secret scanning and CodeQL are not available for
-this private repository) runs on every pull request, on pushes to `main` and weekly: `Secrets (gitleaks)` scans the
+The **Security** workflow (`.github/workflows/security.yml`; GitHub's own secret scanning and CodeQL run on this
+public repository as well) runs on every pull request, on pushes to `main` and weekly: `Secrets (gitleaks)` scans the
 whole git history, `Code (Semgrep)` runs the Semgrep registry rules, `Dependencies` runs pip-audit on
 `requirements.txt` and `requirements-dev.txt`. The same checks locally (gitleaks 8.30.1, semgrep 1.180.0, pip-audit
 2.10.1):
@@ -296,3 +294,7 @@ the same commit and version always build byte-identical archives.
 ### Dependencies
 
 Renovate (`renovate.json`) opens pull requests when dependencies have new releases. Enable it at <https://github.com/apps/renovate>.
+
+## License
+
+MIT, see [LICENSE](LICENSE).

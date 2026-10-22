@@ -173,6 +173,87 @@ def test_token_only_goes_to_the_api_and_redirects_are_followed_without_it(releas
     assert github.requests[-1][0].startswith(CDN)
 
 
+def test_without_a_token_no_authorization_header_is_sent(tmp_path, release_files):
+    """The repository is public: the whole update works without a token, and no request carries one."""
+    install = make_install(tmp_path / "app")
+    github = FakeGitHub(f"v{__version__}", release_files)
+    runner = FakeRunner(install)
+    code = updater.update(install, None, platform="linux", fetch=github, runner=runner, backup_root=tmp_path / "b")
+    assert code == 0
+    assert (install / "VERSION").read_text().strip() == __version__
+    api = [headers for url, headers in github.requests if url.startswith("https://api.github.com/")]
+    assert len(api) == 3  # releases/latest, SHA256SUMS.txt, the archive
+    for url, headers in github.requests:
+        assert "Authorization" not in headers, url
+    assert all(headers["X-GitHub-Api-Version"] == "2022-11-28" for headers in api)
+
+
+def test_with_a_token_every_api_request_carries_it(tmp_path, release_files):
+    install = make_install(tmp_path / "app")
+    github = FakeGitHub(f"v{__version__}", release_files)
+    code = updater.update(
+        install, TOKEN, platform="linux", fetch=github, runner=FakeRunner(install), backup_root=tmp_path / "b"
+    )
+    assert code == 0
+    api = [headers for url, headers in github.requests if url.startswith("https://api.github.com/")]
+    assert len(api) == 3
+    assert all(headers["Authorization"] == f"Bearer {TOKEN}" for headers in api)
+    assert all("Authorization" not in headers for url, headers in github.requests if url.startswith(CDN))
+
+
+def test_a_refused_token_is_dropped_and_the_update_goes_on_without_it(tmp_path, release_files, caplog):
+    """An install from when the repository was private may hold a token that has expired since."""
+    install = make_install(tmp_path / "app")
+    github = FakeGitHub(f"v{__version__}", release_files)
+    plain = github.__call__
+
+    def fetch(url, headers):
+        if "Authorization" in headers:
+            github.requests.append((url, dict(headers)))
+            return FakeResponse(401)
+        return plain(url, headers)
+
+    code = updater.update(
+        install, TOKEN, platform="linux", fetch=fetch, runner=FakeRunner(install), backup_root=tmp_path
+    )
+    assert code == 0
+    assert github.requests[0][1]["Authorization"] == f"Bearer {TOKEN}"
+    assert all("Authorization" not in headers for _, headers in github.requests[1:])
+    assert "trying again without it" in caplog.text
+    assert TOKEN not in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("status", "headers"),
+    [(403, {"X-RateLimit-Remaining": "0"}), (429, {}), (403, {"Retry-After": "60"})],
+)
+@pytest.mark.parametrize("token", [None, TOKEN])
+def test_rate_limit_is_a_clear_error(status, headers, token):
+    def fetch(url, headers_):
+        return FakeResponse(status, b'{"message": "API rate limit exceeded"}', headers)
+
+    with pytest.raises(UpdateError, match="rate limit is used up") as info:
+        updater.latest_release(token, fetch)
+    assert TOKEN not in str(info.value)
+    if token is None:
+        assert "60 requests per hour" in str(info.value)
+
+
+def test_rate_limit_in_main_is_logged_not_a_crash(tmp_path, monkeypatch, caplog):
+    install = make_install(tmp_path / "app")
+    monkeypatch.setitem(updater.update.__kwdefaults__, "fetch", lambda url, headers: FakeResponse(429))
+    code = updater.main(["--install-dir", str(install), "--lock-file", str(tmp_path / "lock"), "--check"])
+    assert code == updater.EXIT_FAILED not in (0, updater.EXIT_UPDATE_AVAILABLE)
+    assert "rate limit is used up" in caplog.text
+    assert "Traceback" not in caplog.text
+
+
+@pytest.mark.parametrize(("status", "message"), [(401, "without a token"), (403, "without a token"), (404, "public")])
+def test_http_errors_without_a_token_are_explained(status, message):
+    with pytest.raises(UpdateError, match=message):
+        updater.latest_release(None, lambda url, headers: FakeResponse(status))
+
+
 def test_redirect_to_plain_http_is_refused():
     def fetch(url, headers):
         return FakeResponse(302, headers={"Location": "http://evil.example/x"})
@@ -639,9 +720,46 @@ def test_main_reads_the_token_file_and_holds_the_lock(tmp_path, monkeypatch):
         pass
 
 
-def test_main_reports_a_missing_token_file(tmp_path, caplog):
+def _capture_token(monkeypatch):
+    seen = []
+
+    def fake_update(install_dir, token, **kwargs):
+        seen.append((token, kwargs["backup_root"]))
+        return 0
+
+    monkeypatch.setattr(updater, "update", fake_update)
+    return seen
+
+
+@pytest.mark.parametrize("content", [None, "", "\n"])
+def test_main_without_a_token_file_or_an_empty_one_updates_without_a_token(tmp_path, monkeypatch, caplog, content):
+    """The systemd unit and the scheduled task always pass --token-file; the file may be missing or empty."""
     install = make_install(tmp_path / "app")
-    code = updater.main(["--install-dir", str(install), "--token-file", str(tmp_path / "nope" / "token")])
+    token_file = tmp_path / "conf" / "github-token"
+    token_file.parent.mkdir()
+    if content is not None:
+        token_file.write_text(content)
+    seen = _capture_token(monkeypatch)
+    caplog.set_level(logging.INFO)
+    assert updater.main(["--install-dir", str(install), "--token-file", str(token_file)]) == 0
+    assert seen == [(None, tmp_path / "conf" / "backups")]
+    assert "without authentication" in caplog.text
+
+
+def test_main_without_the_token_file_option(tmp_path, monkeypatch):
+    install = make_install(tmp_path / "app")
+    seen = _capture_token(monkeypatch)
+    args = ["--install-dir", str(install), "--lock-file", str(tmp_path / "lock"), "--backup-dir", str(tmp_path / "b")]
+    assert updater.main(args) == 0
+    assert seen == [(None, tmp_path / "b")]
+
+
+def test_main_reports_an_unreadable_token_file(tmp_path, monkeypatch, caplog):
+    install = make_install(tmp_path / "app")
+    token_file = tmp_path / "token"
+    token_file.mkdir()  # not a file
+    monkeypatch.setattr(updater, "update", lambda *a, **k: pytest.fail("must not update"))
+    code = updater.main(["--install-dir", str(install), "--token-file", str(token_file)])
     assert code == 1
     assert "cannot read the GitHub token file" in caplog.text
 
@@ -660,9 +778,12 @@ def test_main_refuses_a_concurrent_run(tmp_path):
 
 def test_token_file_must_hold_only_the_token(tmp_path):
     path = tmp_path / "token"
-    path.write_text("")
-    with pytest.raises(UpdateError, match="empty"):
-        updater.read_token(path)
+    assert updater.read_token(None) is None
+    assert updater.read_token(path) is None  # missing: no token
+    path.write_text(" \n")
+    assert updater.read_token(path) is None  # empty: no token
+    path.write_text(f"{TOKEN}\n")
+    assert updater.read_token(path) == TOKEN
     path.write_text("GITHUB_TOKEN = abc\n")
     with pytest.raises(UpdateError, match="only the token") as info:
         updater.read_token(path)

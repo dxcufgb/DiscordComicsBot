@@ -15,12 +15,14 @@ and Windows (scheduled task + Inno Setup wizard) installers.
 - `comicsbot/commands.py` – slash commands; owner-only ones use `@app_commands.check(is_bot_owner)`.
 - `comicsbot/feeds.py` – fetching/parsing feeds and SSRF protection.
 - `comicsbot/updater.py` – opt-in auto-updater (stdlib only, self-contained: the installers run a copy of it
-  outside the package; the GitHub token goes only to api.github.com and never to logs). Checks
+  outside the package; the repository is public, so it needs no GitHub token: an optional one (`--token-file`, a
+  missing or empty file means none; a refused one is dropped) goes only to api.github.com and never to logs). Checks
   `releases/latest`, downloads `comicsbot-X.Y.Z-linux.tar.gz` / `-windows.zip` (name matched ignoring case; top
   folder `comicsbot-X.Y.Z/` or `ComicsBot-X.Y.Z/`, exactly one),
   requires `SHA256SUMS.txt` (a release without them is logged and left alone), `--check` exits 10 when a newer
-  release exists. Extracts by hand, backs up the program files, runs the release's
-  installer and rolls back on failure; a rollback that fails too logs "ROLLBACK FAILED" and keeps the backup.
+  release exists; a rate-limit answer (403/429, 60 requests/hour without a token) is a clear error. Extracts by
+  hand, backs up the program files, runs the release's installer and rolls back on failure; a rollback that fails
+  too logs "ROLLBACK FAILED" and keeps the backup.
 - `comicsbot/announce.py` – after an upgrade, DMs the release notes to server admins once (version in
   `state.json`, notes from the updater's `update-notice.json` or the bundled `RELEASE_NOTES.md`).
 - `comicsbot/storage.py` – `State` in `state.json`, atomic writes, migration from old versions.
@@ -44,11 +46,11 @@ and Windows (scheduled task + Inno Setup wizard) installers.
 ## Install on Linux and releasing
 - **Install on Linux**:
   `curl -fsSL https://raw.githubusercontent.com/dxcufgb/install/main/install.sh | sudo bash -s comicsbot`
-  (private repo: it asks for a fine-grained token with read-only *Contents* access to this repository), or
-  download `comicsbot-linux.tar.gz`, `tar xzf`, `cd comicsbot-X.Y.Z`, `sudo ./install.sh`. Common options:
+  or download `comicsbot-linux.tar.gz`, `tar xzf`, `cd comicsbot-X.Y.Z`, `sudo ./install.sh`. Common options:
   `--yes`/`-y`, `--auto-update`/`--no-auto-update`, `--enable-auto-update`/`--disable-auto-update`,
   `--check-update` (0 = up to date, 10 = newer release, other = error), `--update-now`, `--uninstall [--purge]`,
-  `--help`; `INSTALL_GITHUB_TOKEN` from the one-liner may become the updater token (asked first when interactive).
+  `--help`. Auto-update needs no GitHub token (public repository); `INSTALL_GITHUB_TOKEN` from the one-liner, if
+  set, may become the optional updater token (asked first when interactive); nothing ever prompts for a token.
 - **Releasing**: Actions → Release → Run workflow → type the version. Fallback: publish a release `vX.Y.Z` on
   GitHub, files are attached afterwards. No version bump in the code.
 - Release files: versioned `ComicsBot-X.Y.Z-linux.tar.gz` / `-windows.zip` / `-setup.exe` (top folder
@@ -80,7 +82,7 @@ and Windows (scheduled task + Inno Setup wizard) installers.
   group/other-writable; the bot writes only to `data/` (`comicsbot:comicsbot 750`). Never give program files
   back to the bot's account. The installer refuses a non-empty folder that is not a ComicsBot install.
 - **Auto-update runs as root on Linux** (`comicsbot-update.service` + daily timer; updater copy in
-  `/usr/local/lib/comicsbot-updater/`, token in `/etc/comicsbot/github-token` root 600, backups in
+  `/usr/local/lib/comicsbot-updater/`, optional token in `/etc/comicsbot/github-token` root 600, backups in
   `/var/backups/comicsbot-update`). It must refuse an install folder, program file, parent folder or Python
   interpreter that a non-root account can change, never follow symlinks when backing up or restoring, and
   install the updater from the release being installed, not from the install folder. On Windows the update

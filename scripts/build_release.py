@@ -83,7 +83,6 @@ RELEASE_NOTES = """\
 curl -fsSL https://raw.githubusercontent.com/dxcufgb/install/main/install.sh | sudo bash -s {slug}
 ```
 
-It asks for a fine-grained GitHub token with read-only *Contents* access to this repository (it is private).
 Or download `{slug}-linux.tar.gz`, then
 
 ```sh

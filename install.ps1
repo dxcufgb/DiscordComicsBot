@@ -26,9 +26,10 @@
 
 .EXAMPLE
     install.bat -EnableAutoUpdate
-    Turn on automatic updates (off by default): a daily scheduled task installs new releases. It asks
-    for a GitHub token (or reads the COMICSBOT_GITHUB_TOKEN variable). Run it from the install folder to
-    change only this setting, or from a release folder to install and turn it on in one go.
+    Turn on automatic updates (off by default): a daily scheduled task installs new releases. No GitHub
+    token is needed (the repository is public); one in the COMICSBOT_GITHUB_TOKEN variable, or one stored
+    before, is used. Run it from the install folder to change only this setting, or from a release folder
+    to install and turn it on in one go.
 
 .EXAMPLE
     install.bat -DisableAutoUpdate
@@ -273,6 +274,7 @@ function Copy-Updater {
     Copy-Item $source -Destination (Join-Path $UpdaterDir 'updater.py') -Force
 }
 
+# --token-file is always passed: the updater uses the token only when the file exists and is not empty.
 function Get-UpdaterArgumentList {
     return @('-I', (Join-Path $UpdaterDir 'updater.py'), '--install-dir', $InstallDir,
              '--token-file', $UpdateTokenFile, '--log-file', (Join-Path $UpdaterDir 'update.log'),
@@ -303,24 +305,18 @@ function Register-UpdateTask {
 function Enable-AutoUpdate {
     Write-Step 'Setting up automatic updates'
     Copy-Updater
+    # No token is needed: releases of the public repository download without one. A token given in
+    # COMICSBOT_GITHUB_TOKEN (or stored before) is used; it is never asked for.
     $githubToken = $env:COMICSBOT_GITHUB_TOKEN
-    if (-not $githubToken -and -not (Test-Path $UpdateTokenFile)) {
-        if ($Unattended) { Stop-WithError 'Automatic updates need a GitHub token (the COMICSBOT_GITHUB_TOKEN variable).' }
-        Write-Host "Automatic updates download releases from the private GitHub repository $GitHubRepo."
-        Write-Host 'Create a fine-grained token at https://github.com/settings/personal-access-tokens/new with access'
-        Write-Host "to only $GitHubRepo and the permission Contents: Read-only, and paste it here."
-        $githubToken = Read-Secret 'GitHub token'
-        if (-not $githubToken) { Stop-WithError 'Automatic updates need a GitHub token.' }
-    }
     if ($githubToken) {
         # Restrict the empty file first, so the token is never in a file others can read.
         Write-TextFile $UpdateTokenFile ''
         Protect-SecretFile $UpdateTokenFile
         Write-TextFile $UpdateTokenFile ($githubToken.Trim() + "`r`n")
     }
-    Protect-SecretFile $UpdateTokenFile
+    if (Test-Path $UpdateTokenFile) { Protect-SecretFile $UpdateTokenFile }
     Register-UpdateTask
-    Write-Step 'Automatic updates are on: checked daily (install.bat -CheckUpdate tests the token)'
+    Write-Step "Automatic updates are on: new releases of $GitHubRepo are checked daily (install.bat -CheckUpdate checks now)"
 }
 
 function Disable-AutoUpdate {
@@ -332,7 +328,7 @@ function Disable-AutoUpdate {
 }
 
 function Invoke-Updater([switch]$Check) {
-    if (-not (Test-AutoUpdate) -or -not (Test-Path $UpdateTokenFile)) {
+    if (-not (Test-AutoUpdate)) {
         Stop-WithError 'Automatic updates are not enabled; run install.bat -EnableAutoUpdate first.'
     }
     $python = Join-Path $InstallDir '.venv\Scripts\python.exe'
