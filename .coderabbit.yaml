@@ -1,0 +1,34 @@
+# CodeRabbit settings for DiscordComicsBot.
+# Shared rules come from the central dxcufgb/coderabbit repository (inheritance: true), and CodeRabbit reads
+# CLAUDE.md (and its Review focus) as code guidelines. Only what is specific to this repository is here.
+# Paths here must not repeat a central path (scripts/**/*.js, .github/workflows/**, **/*.sh, **/*.ps1, **/*.iss,
+# module.json, **/*.md): an entry with the same path replaces the central one instead of adding to it.
+# Check the merged result on a pull request with: @coderabbitai configuration
+inheritance: true
+
+reviews:
+  path_filters:
+    - "!tests/updater_2_3_2.py"
+  path_instructions:
+    - path: "comicsbot/feeds.py"
+      instructions: |
+        SSRF protection: every request has a timeout, bodies stay capped at MAX_FEED_BYTES, redirects are followed
+        by hand and every hop is checked with ensure_public_url. Flag any new fetch path (images, previews,
+        favicons) that skips this.
+    - path: "comicsbot/updater.py"
+      instructions: |
+        Stand-alone, standard library only; the installers run a copy outside the package. Token optional (none
+        means no Authorization header; a refused one is dropped), only to api.github.com, never logged.
+        SHA256SUMS.txt required; `--check` exits 10 when newer. Must stay compatible with the published release
+        file names (LEGACY_ASSETS) and with 2.3.2's updater (tests/test_legacy_update.py). Never follow symlinks
+        when backing up or restoring; refuse folders or interpreters a non-root account can change.
+    - path: "comicsbot/**/*.py"
+      instructions: |
+        No blocking calls on the event loop (feedparser stays in asyncio.to_thread). Feed content is untrusted:
+        keep AllowedMentions.none() and split_message (2000 characters). The token never reaches logs or Discord
+        messages. Check AUDIT.md findings do not come back.
+    - path: "{install.sh,install.ps1,install.bat,packaging/**}"
+      instructions: |
+        Linux layout: /opt/comicsbot and the .venv root-owned, bot writes only to data/ (750); `.env` 600. The
+        token goes to install.ps1 through an environment variable, never the command line; upgrades keep `.env`.
+        The Windows update task runs as the bot's own account, never SYSTEM.
