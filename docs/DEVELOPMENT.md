@@ -58,6 +58,8 @@ their updater needs exactly those names, and GitHub refuses two file names that 
 `comicsbot-X.Y.Z-*` cannot be attached as well (the build fails if two names would clash). Once no installation runs
 2.3.2 or older, `LEGACY_ASSETS` goes: the versioned names and their top folder become lowercase `comicsbot-X.Y.Z`.
 
+An installation on 2.3.2 updates to the next release, whose installer puts in the new updater; that one finds the versioned files ignoring case and accepts the top folder `comicsbot-X.Y.Z/` or `ComicsBot-X.Y.Z/`, so a later release can switch to lowercase names without breaking it.
+
 To inspect the files locally, run `python scripts/build_release.py --version 9.9.9`; they're written to `dist/`, and
 the same commit and version always build byte-identical archives.
 
